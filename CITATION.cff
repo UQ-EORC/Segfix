@@ -8,9 +8,6 @@ authors:
     family-names: Devereux
     affiliation: The University of Queensland
     email: devereux.tj@gmail.com
-  - given-names: Josh
-    family-names: Rivory
-    affiliation: The University of Queensland
 repository-code: "https://github.com/UQ-EORC/Segfix"
 url: "https://pypi.org/project/segfix/"
 license: GPL-3.0-or-later
