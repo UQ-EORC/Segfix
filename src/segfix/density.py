@@ -379,7 +379,7 @@ def class_trees(coords: np.ndarray, codes: np.ndarray, candidates: np.ndarray):
 
 
 def whole_class_moves(codes: np.ndarray, before: np.ndarray,
-                      after: np.ndarray) -> dict[int, int]:
+                      after: np.ndarray, trees_only: bool = True) -> dict[int, int]:
     """Original label codes whose *every* working point changed to one and
     the same new label, as ``{code: new_label}``.
 
@@ -392,6 +392,8 @@ def whole_class_moves(codes: np.ndarray, before: np.ndarray,
 
     Only real trees qualify (original label above zero): moving every kept
     unassigned point is not a statement about unassigned points never seen.
+    ``trees_only=False`` drops that rule, for point classes, where every
+    value -- class 0 included -- is a real class.
     ``codes``, ``before`` and ``after`` are aligned per working point.
     """
     changed = before != after
@@ -400,7 +402,7 @@ def whole_class_moves(codes: np.ndarray, before: np.ndarray,
         return out
     for code in np.unique(codes[changed]):
         members = codes == code
-        if not changed[members].all() or before[members].min() <= 0:
+        if not changed[members].all() or (trees_only and before[members].min() <= 0):
             continue
         new = np.unique(after[members])
         if new.size == 1:

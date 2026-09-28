@@ -242,6 +242,7 @@ class _BaseCatalog:
         shift_prompt: ShiftPrompt | None = None,
         density_prompt: DensityPrompt | None = None,
         progress: ProgressFn | None = None,
+        class_field: str | None = None,
     ):
         self.path = path
         self._label_field_req = label_field
@@ -279,6 +280,11 @@ class _BaseCatalog:
 
         # Snapshot to diff against on save — see save().
         self._original_labels = self.labels.copy()
+        self.class_field: str | None = None
+        self.classes: np.ndarray | None = None
+        self._original_classes: np.ndarray | None = None
+        if class_field:
+            self.set_class_field(class_field)
         report("Indexing trees")
         self._build_index()
         report.done()
@@ -394,6 +400,154 @@ class _BaseCatalog:
     def _rows(self, idx: np.ndarray) -> np.ndarray:
         """File rows for working-set positions ``idx``."""
         return idx if self._sub_idx is None else self._sub_idx[idx]
+
+    # -- point classes ----------------------------------------------------
+    #: LAS bit-packed flag bytes: never offered as a class field.
+    _FLAG_FIELDS = ("bit_fields", "classification_flags")
+
+    def class_fields(self) -> list[str]:
+        """Per-point columns that could hold a point class: integer or float
+        scalars other than the coordinates and the tree label (and, for an
+        RGB-segmented PLY, the colour that *is* the tree label).
+
+        A LAS in point formats 0-5 stores its classification in the low five
+        bits of a byte laspy calls ``raw_classification``; it is offered by
+        its usual name, ``classification``.
+        """
+        skip = {self._names.get(n) for n in ("x", "y", "z")}
+        skip.add(self.label_field)
+        if self.is_rgb:
+            skip |= {self._names.get(n) for n in ("red", "green", "blue")}
+        out = []
+        for name in self.dtype.names:
+            if name in skip or name in self._FLAG_FIELDS:
+                continue
+            dt = self.dtype[name]
+            if dt.shape or dt.kind not in "iuf":
+                continue
+            out.append("classification" if name == "raw_classification" else name)
+        return out
+
+    def _class_column(self, field: str) -> tuple[str, int | None]:
+        """``(record field, bit mask or None)`` holding class field ``field``."""
+        if field in self.dtype.names and field not in self._FLAG_FIELDS:
+            column, mask = field, None
+        elif (field.lower() == "classification"
+              and "raw_classification" in self.dtype.names):
+            column, mask = "raw_classification", 0x1F
+        else:
+            raise ValueError(f"{os.path.basename(self.path)} has no field {field!r}")
+        if column == self.label_field:
+            raise ValueError(f"{field!r} is the tree ID field, not a class field")
+        dt = self.dtype[column]
+        if dt.shape or dt.kind not in "iuf":
+            raise ValueError(f"{field!r} isn't a numeric per-point field")
+        return column, mask
+
+    def _class_bounds(self, column: str, mask: int | None) -> tuple[int, int]:
+        if mask is not None:
+            return 0, mask
+        dt = self.dtype[column]
+        if dt.kind in "iu":
+            info = np.iinfo(dt)
+            int32 = np.iinfo(np.int32)
+            return max(int(info.min), int32.min), min(int(info.max), int32.max)
+        # A float holds every integer exactly up to its mantissa: 2**24 for
+        # float32, the narrowest a PLY property can be.
+        return -(2 ** 24), 2 ** 24
+
+    def class_range(self, field: str | None = None) -> tuple[int, int]:
+        """The smallest and largest class value ``field`` (by default the
+        class field in use) can store — a new class has to fit, or saving
+        would silently wrap it."""
+        if field is not None:
+            return self._class_bounds(*self._class_column(field))
+        if self.class_field is None:
+            raise ValueError("no class field set")
+        return self._class_bounds(*self._class_col)
+
+    def _decode_class_column(self, sub, column: str, mask: int | None) -> np.ndarray:
+        raw = np.asarray(sub[column])
+        if mask is not None:
+            raw = raw & mask
+        if raw.dtype.kind == "f":
+            raw = np.rint(np.nan_to_num(raw))
+        lo, hi = self._class_bounds(column, mask)
+        return np.clip(raw.astype(np.int64), lo, hi)
+
+    def _read_class_column(self, column: str, mask: int | None) -> np.ndarray:
+        out = np.empty(self.count, dtype=np.int32)
+        for start in range(0, self.count, _CHUNK):
+            stop = min(start + _CHUNK, self.count)
+            out[start:stop] = self._decode_class_column(
+                self._mm[start:stop], column, mask
+            )
+        return out
+
+    def class_values_in(self, field: str) -> np.ndarray:
+        """The distinct values field ``field`` holds across the whole file —
+        what the class set-up dialog lists before a field is chosen."""
+        column, mask = self._class_column(field)
+        found = np.empty(0, dtype=np.int64)
+        for start in range(0, self.count, _CHUNK):
+            stop = min(start + _CHUNK, self.count)
+            block = self._decode_class_column(self._mm[start:stop], column, mask)
+            found = np.union1d(found, np.unique(block))
+        return found
+
+    def set_class_field(self, field: str | None) -> None:
+        """Read (or, with ``None``, drop) the per-point class field.
+
+        Refused while class edits are unsaved: they belong to the field
+        that is set now, and switching would throw them away unasked.
+        """
+        if self.has_unsaved_class_edits():
+            raise ValueError("Save the class edits before changing the class field")
+        if not field:
+            self.class_field = None
+            self.classes = self._original_classes = None
+            return
+        column, mask = self._class_column(field)
+        classes = self._read_class_column(column, mask)
+        if self._sub_idx is not None:
+            classes = classes[self._sub_idx]
+        self._class_col = (column, mask)
+        self.class_field = field
+        self.classes = classes
+        self._original_classes = classes.copy()
+
+    def has_unsaved_class_edits(self) -> bool:
+        return self.classes is not None and bool(
+            np.any(self.classes != self._original_classes)
+        )
+
+    def _raw_class_codes(self, sub) -> np.ndarray:
+        """Each record's class as the file stores it (see _raw_label_codes)."""
+        return self._decode_class_column(sub, *self._class_col)
+
+    def _tree_class_codes(self, sub) -> np.ndarray:
+        """One code per (file tree, file class) pair, so a class edit on one
+        tree is interpolated only onto points of that same tree and class —
+        a leaf edit on one crown never bleeds into the leaves next door.
+
+        The pair is hashed into one int64 (wrapping multiply by an odd
+        constant); the codes are only ever compared for equality.
+        """
+        tree = self._raw_label_codes(sub).astype(np.uint64)
+        cls = self._raw_class_codes(sub).astype(np.uint64)
+        with np.errstate(over="ignore"):
+            return (tree * np.uint64(0x9E3779B97F4A7C15) + cls).view(np.int64)
+
+    def _write_classes(self, out, rows: np.ndarray, values: np.ndarray) -> None:
+        column, mask = self._class_col
+        dt = self.dtype[column]
+        if mask is not None:
+            # Only the class bits: the rest of the byte is the synthetic /
+            # key-point / withheld flags, which stay as they were.
+            kept = out[column][rows] & np.array(~mask & 0xFF, dtype=dt)
+            out[column][rows] = kept | (values & mask).astype(dt)
+        else:
+            out[column][rows] = values.astype(dt)
 
     # -- global shift ------------------------------------------------------
     def _read_coords(self, shift, out: np.ndarray | None = None):
@@ -521,8 +675,10 @@ class _BaseCatalog:
         return np.asarray(labels).astype(np.int32)
 
     def has_unsaved_edits(self) -> bool:
-        """Whether any label has changed since the file was last written."""
-        return bool(np.any(self.labels != self._original_labels))
+        """Whether any label or class has changed since the file was last
+        written."""
+        return (bool(np.any(self.labels != self._original_labels))
+                or self.has_unsaved_class_edits())
 
     def subset_writer(self):
         """A context manager yielding ``write(rows, dest)``, which writes the
@@ -654,6 +810,8 @@ class _BaseCatalog:
             skip |= {self._names.get(n) for n in ("red", "green", "blue")}
         else:
             skip.add(self.label_field)
+        if self.class_field is not None:
+            skip.add(self._class_col[0])
         attributes = {
             name: np.ascontiguousarray(sub[name])
             for name in self.dtype.names
@@ -672,6 +830,11 @@ class _BaseCatalog:
                 tuple(self.global_shift.tolist())
                 if self.global_shift is not None else None
             ),
+            classes=(
+                self.classes[global_idx].copy()
+                if self.classes is not None else None
+            ),
+            class_field=self.class_field,
         )
         # New tree IDs (splits, grow) must be unique across the *whole* file,
         # not just this subset — see next_free_id(). This mirrors the
@@ -695,6 +858,8 @@ class _BaseCatalog:
         if global_idx is None or global_idx.size == 0:
             return
         self.labels[global_idx] = cloud.labels
+        if self.classes is not None and cloud.classes is not None:
+            self.classes[global_idx] = cloud.classes
         self._build_index()
         if self.labels.size:
             self._next_id = max(self._next_id, int(self.labels.max()) + 1)
@@ -716,10 +881,14 @@ class _BaseCatalog:
         the parts worth watching.
         """
         changed = np.flatnonzero(self.labels != self._original_labels)
+        class_changed = (
+            np.flatnonzero(self.classes != self._original_classes)
+            if self.classes is not None else np.empty(0, dtype=np.int64)
+        )
         target = output or self.path
         is_new_target = os.path.abspath(target) != os.path.abspath(self.path)
 
-        if not is_new_target and changed.size == 0:
+        if not is_new_target and changed.size == 0 and class_changed.size == 0:
             return "Nothing changed since last save"
 
         if is_new_target and not os.path.exists(target):
@@ -730,16 +899,33 @@ class _BaseCatalog:
                 progress(f"Copying to {os.path.basename(target)}…", 0.0)
             shutil.copyfile(self.path, target)
 
-        if changed.size == 0:
+        if changed.size == 0 and class_changed.size == 0:
             self._finalize_save(target, is_new_target)
             return f"Saved (no changes) → {target}"
 
-        rows, values = self._changed_rows(changed, progress)
+        # The interpolation passes share the bar up to the write, the label
+        # pass first; a pass with nothing to do takes no share of it.
+        split = (_SAVE_WRITE_AT * changed.size / (changed.size + class_changed.size)
+                 if class_changed.size and changed.size else
+                 (_SAVE_WRITE_AT if changed.size else 0.0))
+        empty = np.empty(0, dtype=np.int64)
+        rows, values = (
+            self._changed_rows(changed, progress, (0.0, split))
+            if changed.size else (empty, self.labels[empty])
+        )
+        class_rows, class_values = (
+            self._changed_class_rows(class_changed, progress, (split, _SAVE_WRITE_AT))
+            if class_changed.size else (empty, empty)
+        )
         if progress is not None:
-            progress(f"Writing {rows.size:,} points…", _SAVE_WRITE_AT)
+            progress(f"Writing {rows.size + class_rows.size:,} points…",
+                     _SAVE_WRITE_AT)
         out = np.memmap(target, dtype=self.dtype, mode="r+",
                          offset=self.offset, shape=(self.count,))
-        self._write_labels(out, rows, values)
+        if rows.size:
+            self._write_labels(out, rows, values)
+        if class_rows.size:
+            self._write_classes(out, class_rows, class_values)
         out.flush()
         del out
         if progress is not None:
@@ -751,20 +937,48 @@ class _BaseCatalog:
             # Save As to a different file doesn't touch self.path, so an
             # in-place Save afterwards must still see these as pending.
             self._original_labels = self.labels.copy()
-        return f"Saved {rows.size:,} changed point(s) → {target}"
+            if self.classes is not None:
+                self._original_classes = self.classes.copy()
+        if not class_rows.size:
+            return f"Saved {rows.size:,} changed point(s) → {target}"
+        if not rows.size:
+            return f"Saved {class_rows.size:,} reclassified point(s) → {target}"
+        return (f"Saved {rows.size:,} changed point(s) and "
+                f"{class_rows.size:,} reclassified → {target}")
 
     def _changed_rows(
-        self, changed: np.ndarray, progress: ProgressFn | None = None
+        self, changed: np.ndarray, progress: ProgressFn | None = None,
+        span: tuple[float, float] = (0.0, _SAVE_WRITE_AT),
     ):
         """``(file_rows, new_labels)`` to patch for the changed working-set
         positions ``changed`` — the positions themselves at full resolution,
         their full-resolution neighbourhoods when decimated."""
         if self._sub_idx is None:
             return changed, self.labels[changed]
-        return self._expand_to_full(changed, progress)
+        return self._expand_to_full(changed, progress, span)
+
+    def _changed_class_rows(
+        self, changed: np.ndarray, progress: ProgressFn | None = None,
+        span: tuple[float, float] = (0.0, _SAVE_WRITE_AT),
+    ):
+        """:meth:`_changed_rows` for the point classes. A decimated session
+        interpolates them the same way, matching each point to the nearest
+        working point of the same tree *and* class."""
+        if self._sub_idx is None:
+            return changed, self.classes[changed]
+        return self._expand_to_full(
+            changed, progress, span,
+            values=self.classes, original=self._original_classes,
+            codes_of=self._tree_class_codes, trees_only=False,
+        )
 
     def _expand_to_full(
-        self, changed: np.ndarray, progress: ProgressFn | None = None
+        self, changed: np.ndarray, progress: ProgressFn | None = None,
+        span: tuple[float, float] = (0.0, _SAVE_WRITE_AT),
+        values: np.ndarray | None = None,
+        original: np.ndarray | None = None,
+        codes_of=None,
+        trees_only: bool = True,
     ):
         """Interpolate a decimated session's edits back onto every point.
 
@@ -785,8 +999,17 @@ class _BaseCatalog:
         points with it, wherever they are in the file, including any the
         working set never showed because another class's point was kept for
         their voxel.
+
+        ``values``, ``original`` and ``codes_of`` default to the tree labels;
+        the point classes pass their own (see :meth:`_changed_class_rows`).
         """
         from .density import class_trees, expand_labels, in_box, whole_class_moves
+
+        if values is None:
+            values, original = self.labels, self._original_labels
+        if codes_of is None:
+            codes_of = self._raw_label_codes
+        lo_f, hi_f = span
 
         # Which full-resolution points are worth looking at: every occupied
         # voxel keeps a point, so no point sits further than one voxel
@@ -806,24 +1029,24 @@ class _BaseCatalog:
         cand = np.flatnonzero(
             in_box(self.coords, box_lo - 2 * reach, box_hi + 2 * reach)
         )
-        codes = self._raw_label_codes(self._mm[self._sub_idx])
+        codes = codes_of(self._mm[self._sub_idx])
         trees = class_trees(self.coords, codes, cand)
-        whole = whole_class_moves(codes, self._original_labels, self.labels)
+        whole = whole_class_moves(codes, original, values, trees_only=trees_only)
         whole_codes = np.array(sorted(whole), dtype=np.int64)
         whole_labels = np.array([whole[k] for k in whole_codes],
-                                dtype=self.labels.dtype)
+                                dtype=values.dtype)
 
         rows: list[np.ndarray] = []
-        values: list[np.ndarray] = []
+        new_values: list[np.ndarray] = []
         for start in range(0, self.count, _EXPAND_CHUNK):
             stop = min(start + _EXPAND_CHUNK, self.count)
             if progress is not None:
                 progress(
                     "Interpolating edits back to full resolution…",
-                    _SAVE_WRITE_AT * start / max(self.count, 1),
+                    lo_f + (hi_f - lo_f) * start / max(self.count, 1),
                 )
             block = self._mm[start:stop]
-            block_codes = self._raw_label_codes(block)
+            block_codes = codes_of(block)
 
             # Whole-tree moves: by label alone, anywhere in the chunk -- a
             # stranded point can sit outside the box the edits span.
@@ -832,7 +1055,7 @@ class _BaseCatalog:
             if is_whole.any():
                 w = np.flatnonzero(is_whole)
                 rows.append(start + w)
-                values.append(whole_labels[np.searchsorted(whole_codes, block_codes[w])])
+                new_values.append(whole_labels[np.searchsorted(whole_codes, block_codes[w])])
 
             coords = self._decode_coords(block)
             inside = np.flatnonzero(in_box(coords, lo, hi) & ~is_whole)
@@ -843,18 +1066,18 @@ class _BaseCatalog:
                 coords[inside],
                 block_codes[inside],
                 changed,
-                self.labels.size,
+                values.size,
                 max_distance=reach,
             )
             if not local.size:
                 continue
             rows.append(start + inside[local])
-            values.append(self.labels[source])
+            new_values.append(values[source])
 
         if not rows:
             return (np.empty(0, dtype=np.int64),
-                    np.empty(0, dtype=self.labels.dtype))
-        return np.concatenate(rows), np.concatenate(values)
+                    np.empty(0, dtype=values.dtype))
+        return np.concatenate(rows), np.concatenate(new_values)
 
 
 class TreeCatalog(_BaseCatalog):
@@ -1119,6 +1342,7 @@ def open_catalog(
     shift_prompt: ShiftPrompt | None = None,
     density_prompt: DensityPrompt | None = None,
     progress: ProgressFn | None = None,
+    class_field: str | None = None,
 ) -> _BaseCatalog:
     """Open ``path`` with the backend its extension calls for.
 
@@ -1137,6 +1361,10 @@ def open_catalog(
 
     ``progress`` is called as the load moves between phases — see
     :data:`ProgressFn` and :mod:`segfix.progress_ui`.
+
+    ``class_field`` names a per-point point-class column (leaf, wood, ground
+    ... as numbers) to load for editing alongside the tree labels; see
+    :meth:`_BaseCatalog.set_class_field`.
     """
     ext = os.path.splitext(path)[1].lower()
     kwargs = dict(
@@ -1144,6 +1372,7 @@ def open_catalog(
         shift_prompt=shift_prompt,
         density_prompt=density_prompt,
         progress=progress,
+        class_field=class_field,
     )
     if ext == ".ply":
         return TreeCatalog(path, **kwargs)

@@ -65,6 +65,8 @@ def _panel():
         on_fade_neighbours=action("fade others"),
         _step=lambda step: fired.append(f"step {step:+d}"),
         send_to_nth_neighbour=lambda n: fired.append(f"neighbour {n}"),
+        set_nth_class=lambda n: fired.append(f"class {n}"),
+        toggle_color_by_class=action("colour by class"),
     )
     return panel
 
@@ -89,6 +91,9 @@ EXPECTED = {
     "4": "neighbour 4", "5": "neighbour 5",
     "Esc": "move", "Space": "done",
     "Shift+Q": "draw section", "Shift+C": "lasso section",
+    "Ctrl+1": "class 1", "Ctrl+2": "class 2", "Ctrl+3": "class 3",
+    "Ctrl+4": "class 4", "Ctrl+5": "class 5",
+    "Shift+F": "colour by class",
 }
 
 #: What each of them replaced. Still bound: a hand that already knows these

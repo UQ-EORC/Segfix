@@ -58,3 +58,9 @@ def unassign(cloud: PointCloud, indices) -> str:
     """Return the selected points to the unassigned pool."""
     n = cloud.set_labels(indices, UNASSIGNED, "unassign")
     return f"Unassigned {n} points"
+
+
+def set_class(cloud: PointCloud, indices, code: int, name: str) -> str:
+    """Give the selected points the point class ``code`` (named ``name``)."""
+    n = cloud.set_classes(indices, int(code), f"class → {name}")
+    return f"Set {n} points to class {name}"

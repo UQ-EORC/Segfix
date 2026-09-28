@@ -40,12 +40,18 @@ NOISE = -1
 
 @dataclass
 class _Edit:
-    """A reversible change to the label array: ``labels[indices] = new``."""
+    """A reversible change to one per-point array: ``<target>[indices] = new``.
+
+    ``target`` is ``"labels"`` (the tree ID) or ``"classes"`` (the point
+    class), so tree and class edits share one undo history, in the order
+    they were made.
+    """
 
     indices: np.ndarray
     old_values: np.ndarray
     new_value: int
     description: str
+    target: str = "labels"
 
 
 @dataclass
@@ -68,6 +74,10 @@ class PointCloud:
         ``(dx, dy, dz)`` already added to ``coords`` relative to the source
         file, or ``None`` if the cloud wasn't shifted. See
         :func:`segfix.treecatalog.suggest_global_shift`.
+    classes / class_field:
+        ``(N,)`` int32 per-point class (leaf, wood, ground, ... as numbers
+        the user names), read from the file's ``class_field``; ``None`` when
+        no class field was chosen. Edited, undone and saved like ``labels``.
     """
 
     coords: np.ndarray
@@ -89,8 +99,10 @@ class PointCloud:
     # Display/analysis metadata only: coordinates are never written back to
     # disk, so this is never subtracted back out on save.
     global_shift: tuple[float, float, float] | None = None
+    classes: np.ndarray | None = None
+    class_field: str | None = None
 
-    # Indices touched by the most recent set_labels/undo/redo (empty on a
+    # Indices touched by the most recent set_labels/set_classes/undo/redo (empty on a
     # no-op, None before the first edit). Lets the viewer recolour just the
     # points that changed instead of the whole cloud on every keystroke.
     last_changed: np.ndarray | None = field(default=None, repr=False)
@@ -106,6 +118,13 @@ class PointCloud:
                 f"coords ({len(self.coords)}) and labels ({len(self.labels)}) "
                 "length mismatch"
             )
+        if self.classes is not None:
+            self.classes = np.asarray(self.classes, dtype=np.int32).reshape(-1)
+            if len(self.classes) != len(self.labels):
+                raise ValueError(
+                    f"classes ({len(self.classes)}) and labels "
+                    f"({len(self.labels)}) length mismatch"
+                )
 
     # -- queries ---------------------------------------------------------
     @property
@@ -130,20 +149,33 @@ class PointCloud:
         Returns the number of points actually changed (0 means no-op, and no
         undo entry is recorded).
         """
+        return self._set("labels", indices, new_value, description)
+
+    def set_classes(self, indices, new_value: int, description: str) -> int:
+        """Set ``classes[indices] = new_value``, recording an undo entry —
+        the class counterpart of :meth:`set_labels`."""
+        if self.classes is None:
+            raise ValueError("this cloud has no point-class field")
+        return self._set("classes", indices, new_value, description)
+
+    def _set(self, target: str, indices, new_value: int, description: str) -> int:
+        values = getattr(self, target)
         indices = np.asarray(indices, dtype=np.int64).reshape(-1)
         empty = np.empty(0, dtype=np.int64)
         if indices.size == 0:
             self.last_changed = empty
             return 0
-        old = self.labels[indices].copy()
+        old = values[indices].copy()
         changed = old != new_value
         if not changed.any():
             self.last_changed = empty
             return 0
         indices = indices[changed]
         old = old[changed]
-        self.labels[indices] = new_value
-        self._undo.append(_Edit(indices, old, int(new_value), description))
+        values[indices] = new_value
+        self._undo.append(
+            _Edit(indices, old, int(new_value), description, target)
+        )
         self._redo.clear()
         self.last_changed = indices
         return int(indices.size)
@@ -162,11 +194,13 @@ class PointCloud:
             self.last_changed = np.empty(0, dtype=np.int64)
             return None
         edit = self._undo.pop()
+        values = getattr(self, edit.target)
         # Restore old values, capturing what they were so redo can re-apply.
-        current = self.labels[edit.indices].copy()
-        self.labels[edit.indices] = edit.old_values
+        current = values[edit.indices].copy()
+        values[edit.indices] = edit.old_values
         self._redo.append(
-            _Edit(edit.indices, current, edit.new_value, edit.description)
+            _Edit(edit.indices, current, edit.new_value, edit.description,
+                  edit.target)
         )
         self.last_changed = edit.indices
         return edit.description
@@ -176,10 +210,12 @@ class PointCloud:
             self.last_changed = np.empty(0, dtype=np.int64)
             return None
         edit = self._redo.pop()
-        current = self.labels[edit.indices].copy()
-        self.labels[edit.indices] = edit.new_value
+        values = getattr(self, edit.target)
+        current = values[edit.indices].copy()
+        values[edit.indices] = edit.new_value
         self._undo.append(
-            _Edit(edit.indices, current, edit.new_value, edit.description)
+            _Edit(edit.indices, current, edit.new_value, edit.description,
+                  edit.target)
         )
         self.last_changed = edit.indices
         return edit.description
