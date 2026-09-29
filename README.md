@@ -13,7 +13,7 @@ A 13-minute captioned tour of every tool, fixing every tree in the example
 cloud from `scripts/make_sample.py`, including large coordinates and dense
 clouds. Click to watch:
 
-[![Watch the segfix walkthrough](https://raw.githubusercontent.com/UQ-EORC/Segfix/main/docs/screenshot.png)](https://github.com/UQ-EORC/Segfix/releases/download/v1.0.11/segfix_walkthrough.mp4)
+[![Watch the segfix walkthrough](https://raw.githubusercontent.com/UQ-EORC/Segfix/main/docs/walkthrough-thumbnail.png)](https://github.com/UQ-EORC/Segfix/releases/download/v1.0.11/segfix_walkthrough.mp4)
 
 Testing is done on Fedora Linux 44, Windows 11 and macOS.
 
