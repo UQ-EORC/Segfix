@@ -257,6 +257,8 @@ to the right edge of the 3D view, next to the points they act on.
    | `X` | Mark selection as noise, or the whole current tree if nothing is selected (dismiss a bush/wall in one key) |
    | `Delete` / `Backspace` | Same as `X` (mark noise) |
    | `F` | Show/hide the unassigned + noise points |
+   | `Ctrl+1`…`Ctrl+5` | Give the selection the 1st to 5th point class (see [Point classes](#point-classes)), or the whole current tree if nothing is selected |
+   | `Shift+F` | Colour by point class / by tree |
    | `G` / `Shift+G` | Hide / fade every other loaded tree (press again to bring them back) |
    | `C` | Cross section on/off |
    | `Shift+Q` | Draw a lasso-section outline |
@@ -329,6 +331,39 @@ to the right edge of the 3D view, next to the points they act on.
    only the Done ones — for when a plot is reviewed for the few trees you
    actually need.
 
+## Point classes
+
+Besides which tree each point belongs to, Segfix can edit what each point
+*is* — leaf, wood, understorey, ground, or any classes you use — held in one
+numeric per-point field of the cloud, such as a LAS `classification` or a
+PLY property like `semantic`.
+
+**Edit ▸ Point Classes…** (or **Set up…** in the **Point class** box under
+**Current tree**) picks the field and names its values. The file stores only
+numbers, so the names are yours: the dialog lists every value the field
+holds, and you type what each one means (a LAS `classification` starts from
+the standard ASPRS names). **Add class** adds a value the file doesn't have
+yet. The field and names are remembered with the project, so they're set
+once. `--class-field NAME` on the command line picks the field too.
+
+Classes are edited inside the same tree-and-neighbours review. The
+**Point class** box has a button per class, the first five on
+`Ctrl+1`…`Ctrl+5`: lasso some points and press one to give them that class,
+or press one with nothing selected to give the whole current tree that class.
+**Colour by class** (`Shift+F`) colours the points by class instead of by
+tree — wood brown, leaves green and ground tan when the names say so — and
+a tree's fade still applies. **New class…** adds a class numbered one above
+the rest and gives it to the selection, if there is one. Class edits undo and
+redo along with the tree edits, in the order they were made.
+
+**Save** writes only the class values that changed, like the tree IDs, so
+every other byte of the file stays as it was. In LAS point formats 0–5 the
+classification is the low five bits of a byte it shares with the synthetic,
+key-point and withheld flags; only those five bits are written, so values run
+0–31 there. On a downsampled session, class edits are carried back to every
+original point the way tree edits are, each point following the nearest kept
+point of the same tree *and* class.
+
 ## Layout
 
 | File | Responsibility |
@@ -354,6 +389,7 @@ to the right edge of the 3D view, next to the points they act on.
 | `registry.py` | on-disk list of recently opened files/projects |
 | `workspace.py` | project folders: copy (or decompress `.laz`→`.las`) an imported file, never touch the source |
 | `startup_ui.py` | startup dialog: pick a recent entry or start a new project |
+| `classes_ui.py` | Edit ▸ Point Classes…: pick the class field and name its values |
 | `update.py` | update check: a newer PyPI release for an installed copy, new commits for a git checkout |
 | `app.py` | `segfix` CLI entry point |
 

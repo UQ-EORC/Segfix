@@ -203,6 +203,93 @@ def colors_for_labels(labels: np.ndarray, label_colors=None, faded=None) -> np.n
     return colors
 
 
+# -- point classes -------------------------------------------------------
+# Colours for the names people actually give their classes, so a cloud
+# coloured by class reads at a glance: wood brown, leaves green, ground tan.
+# Matched on the lower-cased name's start, first hit wins.
+_NAMED_CLASS_COLOURS = (
+    (("wood", "stem", "trunk", "branch", "bark"), (0.55, 0.33, 0.16)),
+    (("leaf", "leaves", "foliage", "canopy", "crown"), (0.20, 0.70, 0.25)),
+    (("under", "shrub", "bush", "low veg"), (0.62, 0.82, 0.25)),
+    (("ground", "terrain", "soil"), (0.78, 0.66, 0.45)),
+    (("noise", "outlier"), (0.35, 0.35, 0.38)),
+    (("unclass", "never", "unknown"), (0.60, 0.61, 0.63)),
+    (("build", "structure", "wall", "man"), (0.80, 0.30, 0.30)),
+    (("water",), (0.25, 0.50, 0.85)),
+)
+
+# Distinct, fairly saturated colours for everything else, in order — the
+# Okabe-Ito set minus black, then Tableau's extras.
+_CLASS_PALETTE = (
+    (0.90, 0.62, 0.00), (0.34, 0.71, 0.91), (0.00, 0.62, 0.45),
+    (0.94, 0.89, 0.26), (0.00, 0.45, 0.70), (0.84, 0.37, 0.00),
+    (0.80, 0.47, 0.65), (0.58, 0.40, 0.74), (0.55, 0.34, 0.29),
+    (0.89, 0.47, 0.76), (0.74, 0.74, 0.13), (0.09, 0.75, 0.81),
+)
+
+
+def class_colors(names: dict[int, str]) -> dict[int, tuple[float, float, float]]:
+    """``{code: (r, g, b)}`` for a class mapping ``{code: name}``.
+
+    A recognised name gets its natural colour; the rest take the palette in
+    code order, skipping colours a named class already has. Codes only ever
+    get added at the top (a new class is ``max + 1``), so adding one never
+    recolours the classes already on screen.
+    """
+    out: dict[int, tuple[float, float, float]] = {}
+    for code, name in names.items():
+        low = name.strip().lower()
+        for prefixes, rgb in _NAMED_CLASS_COLOURS:
+            if low.startswith(prefixes):
+                out[code] = rgb
+                break
+    free = [c for c in _CLASS_PALETTE if c not in out.values()]
+    k = 0
+    for code in sorted(names):
+        if code in out:
+            continue
+        if k < len(free):
+            out[code] = free[k]
+        else:
+            h = np.mod(code * _HUE_STRIDE, 1.0)
+            out[code] = tuple(float(v) for v in _hsv_to_rgb(h, 0.75, 0.9))
+        k += 1
+    return out
+
+
+def colors_for_classes(classes: np.ndarray, colours: dict, labels=None,
+                       faded=None) -> np.ndarray:
+    """``(N, 4)`` RGBA colouring points by their point class.
+
+    A value with no entry in ``colours`` (not in the mapping) is drawn grey.
+    ``labels`` + ``faded`` keep the per-tree fade working in class colours.
+    """
+    classes = np.asarray(classes)
+    rgba = np.empty((len(classes), 4), dtype=np.float32)
+    rgba[:] = UNASSIGNED_COLOR
+    for code, rgb in colours.items():
+        rgba[classes == code, :3] = rgb
+    rgba[:, 3] = 1.0
+    if faded is not None and labels is not None:
+        faded = list(faded)
+        if faded:
+            rgba[np.isin(labels, faded), 3] = FADED_ALPHA
+    return rgba
+
+
+def point_colors(cloud: PointCloud, faded=None, class_colours=None,
+                 rows=None) -> np.ndarray:
+    """Colours for ``cloud`` (or just its ``rows``): by point class when
+    ``class_colours`` is given and the cloud has classes, else by tree."""
+    labels = np.asarray(cloud.labels)
+    if rows is not None:
+        labels = labels[rows]
+    if class_colours is not None and cloud.classes is not None:
+        classes = cloud.classes if rows is None else cloud.classes[rows]
+        return colors_for_classes(classes, class_colours, labels, faded)
+    return colors_for_labels(labels, cloud.label_colors, faded)
+
+
 def visibility_mask(labels: np.ndarray, hide_unassigned=False,
                     hidden=None, cross_section=None):
     """Per-point ``shown`` mask, ANDing together every visibility filter.
@@ -223,7 +310,8 @@ def visibility_mask(labels: np.ndarray, hide_unassigned=False,
     return shown
 
 
-def refresh_view(view, cloud: PointCloud, faded=None, changed=None) -> None:
+def refresh_view(view, cloud: PointCloud, faded=None, changed=None,
+                 class_colours=None) -> None:
     """Re-apply point colours to ``view`` after the labels have changed.
 
     ``faded`` (an iterable of tree IDs) keeps those trees ghosted through the
@@ -234,6 +322,9 @@ def refresh_view(view, cloud: PointCloud, faded=None, changed=None) -> None:
     recomputed instead of the whole cloud — the common case on a per-edit
     keystroke. An empty ``changed`` means the op was a no-op, so nothing needs
     redrawing at all.
+
+    ``class_colours`` (see :func:`class_colors`) colours by point class
+    instead of by tree.
     """
     if changed is not None and len(changed) == 0:
         return
@@ -244,9 +335,7 @@ def refresh_view(view, cloud: PointCloud, faded=None, changed=None) -> None:
         and fc.shape == (cloud.n_points, 4)
     ):
         fc = fc.copy()
-        fc[changed] = colors_for_labels(
-            np.asarray(cloud.labels)[changed], cloud.label_colors, faded
-        )
+        fc[changed] = point_colors(cloud, faded, class_colours, rows=changed)
     else:
-        fc = colors_for_labels(cloud.labels, cloud.label_colors, faded)
+        fc = point_colors(cloud, faded, class_colours)
     view.face_color = fc

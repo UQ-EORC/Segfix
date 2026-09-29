@@ -66,6 +66,7 @@ from .lasso import ClusterTool, LassoTool
 from .model import NOISE, UNASSIGNED, PointCloud
 from .viewer import (
     busy,
+    class_colors,
     colors_for_labels,
     refresh_view,
     visibility_mask,
@@ -79,6 +80,9 @@ from .viewer import (
 #: How many neighbouring trees the number keys reach: 1-5 is as far as a
 #: left hand goes without moving. Further neighbours keep their button.
 NEIGHBOUR_KEYS = 5
+
+#: How many point classes Ctrl+number reaches, for the same reason.
+CLASS_KEYS = 5
 
 def key_badge(digit: str, colour: QColor, size: int = 16) -> QPixmap:
     """A little keycap with ``digit`` on it, for the button that key presses.
@@ -182,6 +186,21 @@ class SegFixController:
         #: The tree this cloud was loaded for, if it was loaded for one; see
         #: set_cloud. None when the whole file is the scene.
         self.focus_label: int | None = None
+        #: Point classes: ``{value: name}`` for the cloud's class field
+        #: (empty when there is none), and whether the view is coloured by
+        #: class rather than by tree. Both outlive set_cloud.
+        self.class_names: dict[int, str] = {}
+        self.class_field: str | None = None
+        self.color_by_class = False
+        #: ``(lowest, highest)`` value the class field can store, or None;
+        #: a new class must fit. Set by the app from the catalog.
+        self.class_range: tuple[int, int] | None = None
+
+    def class_colours(self) -> dict | None:
+        """``{value: rgb}`` while colouring by class, else None."""
+        if not self.color_by_class or self.cloud.classes is None:
+            return None
+        return class_colors(self.class_names)
 
     def set_cloud(self, cloud: PointCloud, focus: int | None = None) -> None:
         """Re-point the controller at a freshly loaded cloud (the view has
@@ -489,6 +508,7 @@ class SegFixController:
         refresh_view(
             self.view, self.cloud, self.faded_ids,
             changed=self.cloud.last_changed,
+            class_colours=self.class_colours(),
         )
         self.view.selected = set()
         self.view.status = message
@@ -520,6 +540,12 @@ class SegFixWidget(QWidget):
         # mirrors done-state from the same sidecar file) refreshes the moment
         # a tree is marked done here, instead of waiting for the next save.
         self.on_done_changed = None
+        # Optional fn()->None: set by the app to open the class set-up
+        # dialog (which needs the file, not just the loaded cloud).
+        self.on_setup_classes = None
+        # Optional fn(names)->None: set by the app to remember the class
+        # names with the project when a class is added here.
+        self.on_class_names_changed = None
         self._bbox_ids: set[int] = set()
         self._bbox_busy = False
         controller.on_cloud_changed = self._on_cloud_changed
@@ -952,6 +978,7 @@ class SegFixWidget(QWidget):
         self._button(sel, "Noise (X)", self.on_noise, "noise")
         sel_box.show()
         sel_box.raise_()
+        self._build_class_overlay()
         self._position_current_tree_overlay()
         self.c.view.canvas.events.resize.connect(
             self._position_current_tree_overlay
@@ -982,6 +1009,202 @@ class SegFixWidget(QWidget):
         )
         self._on_cloud_changed()
 
+    # -- point classes ------------------------------------------------
+    CLASS_ROWS = 3  # rows of class buttons shown before the box scrolls
+
+    def _build_class_overlay(self) -> None:
+        """The "Point class" box, floating under "Current tree": a button
+        per class to give the selection that class, the colour-by-class
+        toggle, and the way to add a class or set the field up."""
+        box = QGroupBox("Point class", self.c.view.native)
+        box.setObjectName("classOverlay")
+        box.setFixedWidth(self.OVERLAY_W)
+        self._class_overlay = box
+        lay = QVBoxLayout(box)
+        lay.setSpacing(3)
+        self.class_color_cb = QCheckBox("Colour by class (Shift+F)")
+        self.class_color_cb.setToolTip(
+            "Colour points by their class instead of by tree"
+        )
+        self.class_color_cb.toggled.connect(self._on_color_by_class)
+        lay.addWidget(self.class_color_cb)
+        self.class_info = QLabel()
+        self.class_info.setWordWrap(True)
+        lay.addWidget(self.class_info)
+        self.class_grid = QGridLayout()
+        self.class_grid.setContentsMargins(0, 0, 0, 0)
+        self.class_grid.setSpacing(4)
+        host = QWidget()
+        host.setLayout(self.class_grid)
+        host.setAutoFillBackground(False)
+        self.class_scroll = QScrollArea()
+        self.class_scroll.setObjectName("classScroll")
+        self.class_scroll.setWidget(host)
+        self.class_scroll.setWidgetResizable(True)
+        self.class_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.class_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.class_scroll.viewport().setAutoFillBackground(False)
+        row_h = self._neighbour_row_height()
+        self.class_scroll.setFixedHeight(
+            self.CLASS_ROWS * row_h + (self.CLASS_ROWS - 1) * 4
+        )
+        lay.addWidget(self.class_scroll)
+        buttons = QHBoxLayout()
+        self.new_class_btn = QPushButton("New class…")
+        self.new_class_btn.setToolTip(
+            "Add a class - and give it to the selection, if there is one"
+        )
+        self.new_class_btn.clicked.connect(self.on_new_class)
+        buttons.addWidget(self.new_class_btn)
+        self.setup_class_btn = QPushButton("Set up…")
+        self.setup_class_btn.setToolTip(
+            "Choose the file's class field and name its classes"
+        )
+        self.setup_class_btn.clicked.connect(self._on_setup_classes)
+        buttons.addWidget(self.setup_class_btn)
+        lay.addLayout(buttons)
+        box.show()
+        box.raise_()
+        self._class_btns: list[QPushButton] = []
+        self._class_codes: list[int] = []
+
+    def _on_setup_classes(self) -> None:
+        if self.on_setup_classes is not None:
+            self.on_setup_classes()
+
+    def _rebuild_class_buttons(self) -> None:
+        """One button per named class, in value order; the first
+        :data:`CLASS_KEYS` wear the Ctrl+number that presses them."""
+        while self.class_grid.count():
+            w = self.class_grid.takeAt(0).widget()
+            if w is not None:
+                # Hidden now, not just when deleteLater gets round to it: a
+                # rename would otherwise show the old buttons until then.
+                w.hide()
+                w.deleteLater()
+        has_field = self.c.class_field is not None
+        self._class_codes = sorted(self.c.class_names) if has_field else []
+        self._class_btns = []
+        colours = class_colors(self.c.class_names)
+        text_colour = self.palette().buttonText().color()
+        for i, code in enumerate(self._class_codes):
+            name = self.c.class_names[code]
+            r, g, b = (int(v * 255) for v in colours[code])
+            btn = QPushButton(f" {name}")
+            keyed = i < CLASS_KEYS
+            if keyed:
+                btn.setIcon(QIcon(key_badge(str(i + 1), text_colour)))
+                btn.setIconSize(QSize(16, 16))
+            btn.setStyleSheet(
+                f"QPushButton {{ border: 2px solid rgb({r},{g},{b}); "
+                "border-radius: 3px; padding: 2px 4px; text-align: left; }"
+            )
+            key = f" (Ctrl+{i + 1})" if keyed else ""
+            btn.setToolTip(
+                f"Give the selection class {name} (value {code}){key}. "
+                "With nothing selected, the whole current tree."
+            )
+            btn.clicked.connect(
+                lambda _checked=False, c=code: self.on_set_class(c)
+            )
+            self.class_grid.addWidget(btn, i // 2, i % 2)
+            self._class_btns.append(btn)
+        self.class_color_cb.setEnabled(has_field)
+        self.new_class_btn.setEnabled(has_field)
+        self.class_scroll.setVisible(has_field)
+        self.setup_class_btn.setVisible(self.on_setup_classes is not None)
+        if has_field:
+            self.class_info.setText(f"Field: {self.c.class_field}")
+        else:
+            self.class_info.setText(
+                "No class field - Set up… to edit leaf, wood, ground…"
+            )
+        self._class_overlay.adjustSize()
+        self._position_current_tree_overlay()
+
+    def _on_color_by_class(self, checked: bool) -> None:
+        self.c.color_by_class = checked
+        self._apply_transparency()
+        self.c.view.status = (
+            "Coloured by point class" if checked else "Coloured by tree"
+        )
+
+    def toggle_color_by_class(self) -> None:
+        """Shift+F: flip "Colour by class" (when there are classes)."""
+        if self.class_color_cb.isEnabled():
+            self.class_color_cb.toggle()
+        else:
+            self.c.view.status = "No class field - Set up… in Point class"
+
+    def on_set_class(self, code: int) -> None:
+        """Selection → class ``code``; with nothing selected, the whole
+        current tree (the way D and X act on it)."""
+        if self.c.cloud.classes is None:
+            self.c.view.status = "No class field - Set up… in Point class"
+            return
+        idx = self._selection_or_current_tree("classify")
+        if idx is None:
+            return
+        name = self.c.class_names.get(code, str(code))
+        self._apply(ops.set_class(self.c.cloud, idx, code, name))
+
+    def set_nth_class(self, n: int) -> None:
+        """Ctrl+``n``: the ``n``-th class button, counting from 1."""
+        if self.c.cloud.classes is None:
+            self.c.view.status = "No class field - Set up… in Point class"
+            return
+        if n > len(self._class_codes):
+            self.c.view.status = (
+                f"Only {len(self._class_codes)} class"
+                f"{'es' if len(self._class_codes) != 1 else ''}"
+            )
+            return
+        self.on_set_class(self._class_codes[n - 1])
+
+    def on_new_class(self) -> None:
+        """Name a new class, numbered one above the highest there is, and
+        give it to the selection if there is one."""
+        from qtpy.QtWidgets import QInputDialog
+
+        if self.c.cloud.classes is None:
+            return
+        name, ok = QInputDialog.getText(self, "New class", "Class name:")
+        name = name.strip()
+        if not ok or not name:
+            return
+        if name.lower() in {n.lower() for n in self.c.class_names.values()}:
+            self.c.view.status = f"There is already a class called {name}"
+            return
+        code = self.new_class_code()
+        if code is None:
+            QMessageBox.warning(
+                self, "No room for another class",
+                f"The field {self.c.class_field} can't hold another "
+                f"class value (it tops out at {self.c.class_range[1]}).",
+            )
+            return
+        self.c.class_names[code] = name
+        if self.on_class_names_changed is not None:
+            self.on_class_names_changed(dict(self.c.class_names))
+        self._rebuild_class_buttons()
+        if self.c.selected_indices().size:
+            self.on_set_class(code)
+        else:
+            self.c.view.status = f"Added class {name} (value {code})"
+
+    def new_class_code(self) -> int | None:
+        """The value a new class gets: one above every value named or
+        present in the loaded points, or None if the field can't hold it."""
+        used = set(self.c.class_names)
+        if self.c.cloud.classes is not None and self.c.cloud.classes.size:
+            used.add(int(self.c.cloud.classes.max()))
+        code = max(used) + 1 if used else 0
+        lo, hi = self.c.class_range or (0, np.iinfo(np.int32).max)
+        code = max(code, lo)
+        return code if code <= hi else None
+
     # -- helpers -----------------------------------------------------
     def _apply_overlay_theme(self, mode: str) -> None:
         col = theme.panel_colors(mode)
@@ -992,22 +1215,27 @@ class SegFixWidget(QWidget):
                 + "; border-radius: 5px; } "
                 "QWidget#pointSizeOverlay QLabel { color: " + col["text"] + "; }"
             )
-        ct = getattr(self, "_current_tree_overlay", None)
-        if ct is not None:
-            ct.setStyleSheet(
-                "QGroupBox#currentTreeOverlay {"
+        for box in (getattr(self, "_current_tree_overlay", None),
+                    getattr(self, "_class_overlay", None)):
+            if box is None:
+                continue
+            name = box.objectName()
+            box.setStyleSheet(
+                f"QGroupBox#{name} {{"
                 " background: " + col["bg"] + ";"
                 " border: 1px solid " + col["border"] + ";"
                 " border-radius: 6px; margin-top: 8px; }"
-                "QGroupBox#currentTreeOverlay::title {"
+                f"QGroupBox#{name}::title {{"
                 " subcontrol-origin: margin; left: 8px; padding: 0 4px;"
                 " color: " + col["subtext"] + "; }"
-                "QGroupBox#currentTreeOverlay QLabel { color: "
-                + col["text"] + "; }"
-                # the neighbour scroller must not paint its own rectangle
+                f"QGroupBox#{name} QLabel, QGroupBox#{name} QCheckBox "
+                "{ color: " + col["text"] + "; }"
+                # the button scrollers must not paint their own rectangle
                 # over the translucent panel
                 "QScrollArea#neighbourScroll, "
-                "QScrollArea#neighbourScroll > QWidget > QWidget "
+                "QScrollArea#neighbourScroll > QWidget > QWidget, "
+                "QScrollArea#classScroll, "
+                "QScrollArea#classScroll > QWidget > QWidget "
                 "{ background: transparent; }"
             )
         # Re-tint the "done" rows for the new theme (dark vs pale green).
@@ -1195,6 +1423,9 @@ class SegFixWidget(QWidget):
         margin = 10
         x = max(margin, native.width() - box.width() - margin)
         box.move(x, margin)
+        classes = getattr(self, "_class_overlay", None)
+        if classes is not None:
+            classes.move(x, margin + box.height() + 6)
 
     def on_toggle_lasso(self, checked: bool) -> None:
         if checked:
@@ -1319,6 +1550,11 @@ class SegFixWidget(QWidget):
         self._update_lasso_section_label()
         self._load_progress()  # done-tree set lives beside the source file
         self._on_point_size(self.size_spin.value())  # size persists across loads
+        # The view drew the new cloud in tree colours; a class colouring
+        # carries across loads, like the point size.
+        self._rebuild_class_buttons()
+        if self.c.class_colours() is not None:
+            self._apply_transparency()
         self._update_info()
         self._update_selection()
         # Keep the selection readout live as the lasso changes it.
@@ -1764,7 +2000,8 @@ class SegFixWidget(QWidget):
         points stay shown and selectable."""
         if not len(self.c.view.coords):
             return
-        refresh_view(self.c.view, self.c.cloud, self.c.faded_ids)
+        refresh_view(self.c.view, self.c.cloud, self.c.faded_ids,
+                     class_colours=self.c.class_colours())
 
     def _mark_done(self, tid: int, done: bool) -> None:
         if done:
@@ -2190,7 +2427,8 @@ class SegFixWidget(QWidget):
 #: these (bar the legacy keys it also keeps).
 LEFT_HAND_KEYS = frozenset(
     "QWERT" "ASDFG" "ZXCVB" "12345"
-) | {"Esc", "Space", "Shift+Q", "Shift+W", "Shift+E", "Shift+C", "Shift+G"}
+) | {"Esc", "Space", "Shift+Q", "Shift+W", "Shift+E", "Shift+C", "Shift+G",
+     "Shift+F"} | {f"Ctrl+{n}" for n in range(1, CLASS_KEYS + 1)}
 
 
 def shortcut_bindings(panel) -> dict:
@@ -2221,6 +2459,13 @@ def shortcut_bindings(panel) -> dict:
             str(n): (lambda n=n: panel.send_to_nth_neighbour(n))
             for n in range(1, NEIGHBOUR_KEYS + 1)
         },
+        # Ctrl+1-5: give the selection the 1st-5th point class, the class
+        # counterpart of 1-5 above.
+        **{
+            f"Ctrl+{n}": (lambda n=n: panel.set_nth_class(n))
+            for n in range(1, CLASS_KEYS + 1)
+        },
+        "Shift+F": panel.toggle_color_by_class,
         "S": panel.on_create_new,
         # Invert sits on B, beside the other selection-wide keys and still
         # under the same hand: it is a selection op, not an edit.

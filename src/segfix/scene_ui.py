@@ -104,6 +104,16 @@ class SceneController:
         if self._global_idx is not None:
             self.catalog.apply(self.seg.cloud, self._global_idx)
 
+    def reload_current(self) -> str | None:
+        """Load the tree under review afresh — after the class field changed,
+        so the points on screen carry the new field. The caller flushes the
+        live scene first; its arrays belong to the old field and must not be
+        applied over the new one, so they are dropped here, not flushed."""
+        if self.current_label is None:
+            return None
+        self._global_idx = None
+        return self.load_tree(self.current_label)
+
     def has_unsaved_edits(self) -> bool:
         """Whether anything edited this session hasn't been saved — on the
         tree loaded now *or* any tree visited before it.

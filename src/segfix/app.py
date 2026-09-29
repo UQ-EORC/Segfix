@@ -207,6 +207,12 @@ def main(argv=None) -> int:
         help="Name of the per-point tree/instance ID field (auto-detected if omitted)",
     )
     parser.add_argument(
+        "--class-field",
+        default=None,
+        help="Name of a per-point class field (leaf, wood, ground... as "
+             "numbers) to edit alongside the tree IDs; remembered per project",
+    )
+    parser.add_argument(
         "--point-size", type=float, default=3.0,
         help="Render size of points in screen pixels (default: 3)",
     )
@@ -483,6 +489,10 @@ def _build_menus(win, panel, catalog=None, scene=None) -> None:
     redo_act = edit_menu.addAction("Redo")
     redo_act.setShortcut("Ctrl+Shift+Z")
     redo_act.triggered.connect(panel.on_redo)
+    if catalog is not None:
+        edit_menu.addSeparator()
+        classes_act = edit_menu.addAction("Point Classes…")
+        classes_act.triggered.connect(panel._on_setup_classes)
 
     pref_menu = bar.addMenu("&Preferences")
     theme_menu = pref_menu.addMenu("Theme")
@@ -500,6 +510,94 @@ def _build_menus(win, panel, catalog=None, scene=None) -> None:
     help_menu = bar.addMenu("&Help")
     about_act = help_menu.addAction("About segfix")
     about_act.triggered.connect(lambda: _about(win))
+
+
+def _class_names_from_settings(saved) -> dict[int, str]:
+    """The ``{value: name}`` the manifest keeps as ``{"value": name}``."""
+    out = {}
+    for key, name in (saved or {}).items():
+        try:
+            out[int(key)] = str(name)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _remember_classes(catalog, field, names) -> None:
+    from . import workspace
+
+    workspace.remember(
+        catalog.path, class_field=field,
+        class_names={str(k): v for k, v in sorted(names.items())},
+    )
+
+
+def _use_classes(panel, catalog, names) -> None:
+    """Point the editing controller at the catalog's class field + names."""
+    import numpy as np
+
+    seg = panel.c
+    seg.class_field = catalog.class_field
+    seg.class_range = catalog.class_range() if catalog.class_field else None
+    if catalog.class_field and catalog.classes is not None:
+        # Every value in the file gets a name, even one the project never
+        # named, so no class is left without a button.
+        for value in np.unique(catalog.classes).tolist():
+            names.setdefault(int(value), f"Class {value}")
+    seg.class_names = names if catalog.class_field else {}
+    if not catalog.class_field and panel.class_color_cb.isChecked():
+        panel.class_color_cb.setChecked(False)
+
+
+def _setup_classes(win, panel, catalog, scene) -> None:
+    """Edit ▸ Point Classes… / the Point class box's Set up…: pick the class
+    field and name its values, then reload the scene if the field changed."""
+    from qtpy.QtWidgets import QMessageBox
+
+    from .classes_ui import prompt_class_setup
+    from .viewer import busy
+
+    choice = prompt_class_setup(
+        win, catalog, catalog.class_field, panel.c.class_names
+    )
+    if choice is None:
+        return
+    field, names = choice
+    if field != catalog.class_field:
+        scene._flush()  # so unsaved class edits on screen count too
+        if catalog.has_unsaved_class_edits():
+            answer = QMessageBox.question(
+                win, "Change the class field",
+                "Save the class edits to "
+                f"{catalog.class_field} before switching field?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save,
+            )
+            if answer != QMessageBox.StandardButton.Save:
+                return
+            panel.on_save()
+            if catalog.has_unsaved_class_edits():
+                return  # the save failed and said so
+        busy(panel.c.view, f"Reading {field}…" if field else "Dropping classes…")
+        try:
+            catalog.set_class_field(field)
+        except ValueError as exc:
+            QMessageBox.warning(win, "Can't use that field", str(exc))
+            return
+        _use_classes(panel, catalog, names)
+        _remember_classes(catalog, field, panel.c.class_names)
+        msg = scene.reload_current()
+        panel._rebuild_class_buttons()
+        panel.c.view.status = msg or (
+            f"Point classes from {field}" if field else "Point classes off"
+        )
+        return
+    _use_classes(panel, catalog, names)
+    _remember_classes(catalog, field, panel.c.class_names)
+    panel._rebuild_class_buttons()
+    panel._apply_transparency()
+    panel.c.view.status = "Point classes updated"
 
 
 def _combined_panel(*widgets):
@@ -653,9 +751,26 @@ def _run_scene(args) -> int:
             progress=report,
         )
 
+    from . import workspace
+
+    saved = workspace.settings(args.cloud)
+    class_field = args.class_field or saved.get("class_field")
+    class_problem: list[str] = []
+
+    def _open_with_classes(report, ask):
+        catalog = _open(report, ask)
+        if class_field:
+            # A field the file no longer has shouldn't stop it opening:
+            # open without classes and say why.
+            try:
+                catalog.set_class_field(class_field)
+            except ValueError as exc:
+                class_problem.append(str(exc))
+        return catalog
+
     try:
         catalog = run_with_progress(
-            win, "Opening cloud", os.path.basename(args.cloud), _open
+            win, "Opening cloud", os.path.basename(args.cloud), _open_with_classes
         )
     except Exception as exc:
         # A wrong/corrupt file used to raise this far with the window already
@@ -691,6 +806,16 @@ def _run_scene(args) -> int:
     panel.size_spin.setValue(args.point_size)
     _build_menus(win, panel, catalog, scene_ctrl)
     bind_shortcuts(win, panel)
+    names = (_class_names_from_settings(saved.get("class_names"))
+             if saved.get("class_field") == catalog.class_field else {})
+    _use_classes(panel, catalog, names)
+    if catalog.class_field and catalog.class_field != saved.get("class_field"):
+        _remember_classes(catalog, catalog.class_field, panel.c.class_names)
+    panel.on_setup_classes = lambda: _setup_classes(win, panel, catalog, scene_ctrl)
+    panel.on_class_names_changed = (
+        lambda names: _remember_classes(catalog, catalog.class_field, names)
+    )
+    panel._rebuild_class_buttons()
 
     decimated = (
         f" Downsampled to {catalog.voxel_size * 100:g} cm for editing "
@@ -702,6 +827,8 @@ def _run_scene(args) -> int:
         f"{len(catalog.records)} trees in {args.cloud}. "
         f"Double-click a tree to load it with neighbours.{decimated}"
     )
+    if class_problem:
+        view.status = f"No point classes: {class_problem[0]}"
     return app.exec()
 
 
