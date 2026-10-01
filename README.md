@@ -138,6 +138,37 @@ dismiss as noise (`X`) are written back as `0` (unassigned), Segfix's own
 alone cannot tell noise from unassigned. (arbor writes a signed `treeID`, so
 this does not apply to its output.)
 
+### Per-tree files (one cloud per tree)
+
+Plenty of pipelines emit **one file per tree** — raycloudtools' `raysplit`, and
+most per-tree extraction tools — usually with a ground/unassigned cloud beside
+them. **Per-tree Files…** on the startup dialog imports such a set directly:
+pick the files (or a whole folder), and Segfix merges them into one project
+cloud with each file's tree ID written per point, leaving the originals
+untouched.
+
+Which file is which tree is decided before anything is merged, and the table
+shows the answer for every file as you change it:
+
+* **from the filename**, by a regular expression you can edit — the default
+  takes the last run of digits, so `plot12_tree_7.ply` is tree 7;
+* **from a mapping CSV** of `path,tree_id` rows, which wins over the filename
+  wherever it has a row (matched on the full path or just the name);
+* **typed in** for a one-off file, in the Tree ID column;
+* **as ground**: tick **Ground** and that file's points come in as unassigned
+  rather than as a tree. More than one is fine.
+
+Import is refused until every file has an ID, and if two files claim the same
+tree. The merged copy keeps the fields every input has (LAS: the first file's
+point format, with offsets covering the whole set; PLY: the properties common
+to all of them), and any tree-ID column already in a file is ignored — the
+filename is the authority, which is the point of importing this way. **Export
+Trees…** writes the set back out one file per tree, under those same IDs.
+
+This is worth preferring to merging the files yourself: a merged cloud with no
+tree-ID field falls back to numbering trees by their RGB colour, which has
+nothing to do with the numbering your segmentation used.
+
 ### Large coordinates
 
 Georeferenced clouds (UTM, State Plane, …) have coordinates in the millions,
@@ -406,6 +437,8 @@ point of the same tree *and* class.
 | `registry.py` | on-disk list of recently opened files/projects |
 | `workspace.py` | project folders: copy (or decompress `.laz`→`.las`) an imported file, never touch the source |
 | `startup_ui.py` | startup dialog: pick a recent entry or start a new project |
+| `merge.py` | per-tree file sets: filename/CSV → tree ID, and the streamed merge into one project cloud |
+| `multi_import_ui.py` | the per-tree import dialog: which file is which tree |
 | `classes_ui.py` | Edit ▸ Point Classes…: pick the class field and name its values |
 | `update.py` | update check: a newer PyPI release for an installed copy, new commits for a git checkout |
 | `app.py` | `segfix` CLI entry point |
