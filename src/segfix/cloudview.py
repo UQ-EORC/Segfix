@@ -54,6 +54,15 @@ VIEWS = {
 }
 
 
+#: The inside ("bubble") view: a wide lens, and the pivot a few centimetres
+#: in front of the eye so the turntable turns your head instead of circling
+#: the plot. 70° is about what a person sees as "normal" rather than
+#: fisheyed; the distance is small enough to stand in a trunk and large
+#: enough that the near clipping plane doesn't eat the scene.
+INSIDE_FOV = 70.0
+INSIDE_DISTANCE = 0.05
+
+
 def selection_mask(indices, size: int, base: np.ndarray | None = None):
     """A boolean mask of ``indices`` over ``size`` points.
 
@@ -175,6 +184,8 @@ class CloudView:
         self._face_color = np.empty((0, 4), np.float32)
         self._shown = np.empty(0, dtype=bool)
         self._selected = np.zeros(0, dtype=bool)  # mask over _coords
+        #: (fov, scale_factor, center) to go back to, while inside the cloud.
+        self._outside = None
         self._size = 3.0  # marker diameter in screen pixels
 
         #: fn(str) -> None, set by the shell to write the status bar
@@ -369,7 +380,55 @@ class CloudView:
         self.canvas.update()
 
     # -- camera --------------------------------------------------------
+    # -- inside (bubble) view ---------------------------------------------
+    def enter_inside_view(self, origin=None, fov: float = INSIDE_FOV) -> None:
+        """Stand the camera *at* a point in the cloud and look around.
+
+        An orthographic view of a dense plot is a wall: every stem at every
+        distance is drawn the same size, so what is in front of what cannot
+        be read, and a crown ten metres behind the one being edited looks
+        like part of it. From inside, a perspective projection sorts the
+        scene out the way standing in the forest does — near points spread
+        apart, far ones converge, and a gap you can see through is a gap.
+
+        The turntable then orbits the eye about a pivot a few centimetres
+        away (:data:`INSIDE_DISTANCE`), which is turning your head rather
+        than circling the plot. Scrolling pulls back out of the bubble, and
+        :meth:`leave_inside_view` puts the camera back exactly where it was.
+        """
+        cam = self.view.camera
+        if self._outside is None:
+            self._outside = (cam.fov, cam.scale_factor, tuple(cam.center))
+        if origin is not None:
+            cam.center = tuple(float(v) for v in origin)
+        cam.fov = float(fov)
+        cam.scale_factor = INSIDE_DISTANCE
+        self.canvas.update()
+
+    def leave_inside_view(self) -> None:
+        """Back to the orthographic view the camera had before."""
+        if self._outside is None:
+            return
+        fov, scale_factor, center = self._outside
+        self._outside = None
+        cam = self.view.camera
+        cam.fov = fov
+        cam.scale_factor = scale_factor
+        cam.center = center
+        self.canvas.update()
+
+    @property
+    def inside_view(self) -> bool:
+        return self._outside is not None
+
+    def set_inside_fov(self, fov: float) -> None:
+        """Widen or narrow the lens without leaving the bubble."""
+        if self._outside is not None:
+            self.view.camera.fov = float(fov)
+            self.canvas.update()
+
     def reset_view(self) -> None:
+        self.leave_inside_view()  # framing the whole cloud means standing back
         if not len(self._coords):
             return
         lo = self._coords.min(axis=0)
@@ -392,6 +451,10 @@ class CloudView:
         cam.azimuth, cam.elevation = VIEWS[name]
 
     def fly_to(self, center_xyz, span: float) -> None:
+        # Framing a whole tree is an outside view of it, so a queue step
+        # (Space, a table click) takes the camera back out of the bubble
+        # rather than leaving it buried in the new tree's trunk.
+        self.leave_inside_view()
         cam = self.view.camera
         cam.center = tuple(float(c) for c in center_xyz)
         cam.scale_factor = max(float(span), 0.5) * 1.6

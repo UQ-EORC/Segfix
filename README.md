@@ -208,6 +208,17 @@ at that side (Top looks straight down, Front along +Y), and **3D** goes back to
 the tilted view. They only turn the camera, so whatever you're centred on
 stays in view at the same zoom.
 
+Below the view buttons, **Inside** stands the camera *at* a point in the
+cloud and switches to a perspective projection, like CloudCompare's bubble
+view. An orthographic view of a dense plot is a wall — every stem at every
+distance is drawn the same size, so what is in front of what can't be read,
+and a crown ten metres behind the one you're editing looks like part of it.
+From inside, near points spread apart and far ones converge, so a gap you
+can see through is a gap. Double-click a point to choose where to stand (or
+to move while you're there), drag to look around, **FOV** sets how wide the
+lens is, and scrolling pulls back out. Framing a whole tree — stepping
+through the queue, or loading another tree — steps back outside on its own.
+
 The right-hand panel holds two tables. **All Trees** (top) lists every tree in the
 file, a Done column (`✓` when reviewed), tree ID and point count, with a
 running `N/M trees (X %) done` line above it, **double-click a row** to load

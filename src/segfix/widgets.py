@@ -52,6 +52,7 @@ from qtpy.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
@@ -61,6 +62,7 @@ from qtpy.QtWidgets import (
 
 from . import operations as ops
 from . import theme
+from .cloudview import INSIDE_FOV
 from .icons import icon
 from .lasso import ClusterTool, LassoTool
 from .model import NOISE, UNASSIGNED, PointCloud
@@ -1407,11 +1409,73 @@ class SegFixWidget(QWidget):
             btn.clicked.connect(lambda _c=False, n=name: self.c.view.set_view(n))
             views.addWidget(btn)
         col.addLayout(views)
+
+        # Inside view: stand at a point in the cloud and look around, where
+        # the orthographic view above draws a dense plot as a flat wall.
+        inside = QHBoxLayout()
+        inside.setSpacing(4)
+        self.inside_btn = QToolButton()
+        self.inside_btn.setObjectName("view_inside")
+        self.inside_btn.setText("Inside")
+        self.inside_btn.setCheckable(True)
+        self.inside_btn.setToolTip(
+            "Stand inside the cloud and look around from there, in "
+            "perspective - double-click a point first to choose where, or "
+            "double-click again while inside to move. Scroll to pull back out."
+        )
+        self.inside_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.inside_btn.toggled.connect(self._on_inside_view)
+        inside.addWidget(self.inside_btn)
+        inside.addWidget(QLabel("FOV"))
+        self.fov_spin = QSpinBox()
+        self.fov_spin.setRange(20, 120)
+        self.fov_spin.setSuffix("°")
+        self.fov_spin.setValue(int(INSIDE_FOV))
+        self.fov_spin.setToolTip(
+            "How wide the lens is inside the cloud: narrow picks a gap apart, "
+            "wide shows what is around you"
+        )
+        self.fov_spin.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.fov_spin.valueChanged.connect(self.c.view.set_inside_fov)
+        inside.addWidget(self.fov_spin)
+        inside.addStretch(1)
+        col.addLayout(inside)
         box.adjustSize()
         box.move(10, 10)
         box.show()
         box.raise_()
         self._point_size_overlay = box
+
+    def _on_inside_view(self, inside: bool) -> None:
+        """The Inside toggle: stand at the pivot, or step back out.
+
+        The pivot is wherever the last double-click put it, which is how the
+        camera already works in move mode — so "look through this thicket"
+        is double-click the spot, then Inside.
+        """
+        view = self.c.view
+        if not inside:
+            view.leave_inside_view()
+            view.status = "Back to the orthographic view"
+            return
+        if not len(view.coords):
+            self.inside_btn.setChecked(False)
+            return
+        view.enter_inside_view(fov=self.fov_spin.value())
+        x, y, z = view.view.camera.center
+        view.status = (
+            f"Inside the cloud at {x:,.1f}, {y:,.1f}, {z:,.1f} - drag to look "
+            "around, double-click a point to move there, scroll to pull back"
+        )
+
+    def _sync_inside_button(self) -> None:
+        """Keep the toggle honest when something else left the bubble — a
+        queue step or Reset view flies the camera back out."""
+        inside = self.c.view.inside_view
+        if self.inside_btn.isChecked() != inside:
+            self.inside_btn.blockSignals(True)
+            self.inside_btn.setChecked(inside)
+            self.inside_btn.blockSignals(False)
 
     def _position_current_tree_overlay(self, *_event) -> None:
         """Pin the fixed-size "Current tree" box to the canvas' right edge,
@@ -1676,6 +1740,9 @@ class SegFixWidget(QWidget):
                 f"Tree {tid} - lasso (Q) then A/S/D/X to fix, "
                 "Space to mark done and continue"
             )
+        # Last: framing a tree takes the camera out of the inside view, and
+        # the toggle has to say so.
+        self._sync_inside_button()
 
     def _step(self, delta: int) -> None:
         """Prev/Next: move through the table in its current order."""

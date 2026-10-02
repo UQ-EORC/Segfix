@@ -116,3 +116,47 @@ def test_views_keep_pivot_and_zoom_and_3d_restores_the_tilt(panel):
         assert tuple(cam.center) == (1.0, 2.0, 3.0)
         assert cam.scale_factor == 7.5
     assert (cam.azimuth, cam.elevation) == start
+
+
+# -- the inside (bubble) view ------------------------------------------------
+def test_the_inside_toggle_stands_the_camera_in_the_cloud(panel):
+    p, view = panel
+    view.view.camera.center = (2.0, 3.0, 1.0)  # as a double-click would
+    p.inside_btn.setChecked(True)
+    assert view.inside_view
+    assert view.view.camera.fov == p.fov_spin.value()
+    assert tuple(view.view.camera.center) == (2.0, 3.0, 1.0)
+    p.inside_btn.setChecked(False)
+    assert not view.inside_view
+    assert view.view.camera.fov == 0.0
+
+
+def test_the_fov_spinner_works_from_inside(panel):
+    p, view = panel
+    p.inside_btn.setChecked(True)
+    p.fov_spin.setValue(45)
+    assert view.view.camera.fov == 45.0
+
+
+def test_the_toggle_pops_back_out_when_the_camera_does(panel):
+    """Stepping through the queue flies the camera to frame a whole tree,
+    which leaves the bubble — the button has to say so."""
+    p, view = panel
+    p._set_current(None, fly=False)
+    p.inside_btn.setChecked(True)
+    p._set_current(1, fly=True)  # the one tree this cloud has
+    assert not view.inside_view
+    assert not p.inside_btn.isChecked()
+
+
+def test_the_toggle_refuses_an_empty_cloud(panel):
+    from segfix.model import PointCloud
+
+    p, view = panel
+    empty = PointCloud(coords=np.empty((0, 3), np.float32),
+                       labels=np.empty(0, np.int32))
+    view.load_cloud(empty)
+    p.c.set_cloud(empty)
+    p.inside_btn.setChecked(True)
+    assert not p.inside_btn.isChecked()
+    assert not view.inside_view
