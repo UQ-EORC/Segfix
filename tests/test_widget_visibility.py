@@ -101,3 +101,50 @@ def test_points_moved_into_a_hidden_tree_disappear(panel):
     view.selected = set(TREE1_HALF.tolist())
     p.on_send_to_neighbour(2)
     assert not view.shown[TREE1_HALF].any()
+
+
+# -- where the Point class box lives ------------------------------------------
+def test_the_class_box_floats_over_the_canvas_by_default(panel):
+    """Next to the points it labels — and a project with no class field
+    never has to think about it at all."""
+    p, view = panel
+    assert not p.class_in_bar_cb.isChecked()
+    assert p._class_overlay.parent() is view.native
+
+
+def test_ticking_the_toggle_docks_it_in_the_top_bar(panel):
+    p, _ = panel
+    p.class_in_bar_cb.setChecked(True)
+    assert p._class_overlay.parent() is p.top_bar
+    # One box, moved — not a second copy to keep in step with the first.
+    # (isHidden, not isVisible: the bar itself has no window here.)
+    assert not p._class_overlay.isHidden()
+    assert p._top_bar_row.indexOf(p._class_overlay) >= 0
+
+
+def test_unticking_floats_it_back_over_the_canvas(panel):
+    p, view = panel
+    p.class_in_bar_cb.setChecked(True)
+    p.class_in_bar_cb.setChecked(False)
+    assert p._class_overlay.parent() is view.native
+    assert p._class_overlay.width() == p.OVERLAY_W
+
+
+def test_the_docked_box_is_shorter_than_the_floating_one(panel):
+    """The top bar grows to its tallest box, so the class list scrolls
+    sooner there rather than pushing the canvas down."""
+    p, _ = panel
+    floating = p.class_scroll.height()
+    p.class_in_bar_cb.setChecked(True)
+    assert p.class_scroll.height() < floating
+
+
+def test_the_class_buttons_still_work_from_the_bar(panel):
+    """The same widgets moved, so the wiring has to come with them."""
+    p, _ = panel
+    p.c.class_field = "classification"
+    p.c.class_names = {1: "leaf", 2: "wood"}
+    p._rebuild_class_buttons()
+    p.class_in_bar_cb.setChecked(True)
+    assert [b.text().strip() for b in p._class_btns] == ["leaf", "wood"]
+    assert p.class_color_cb.isEnabled()

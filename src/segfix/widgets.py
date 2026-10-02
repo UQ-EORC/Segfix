@@ -753,6 +753,15 @@ class SegFixWidget(QWidget):
         )
         self.fade_others_cb.toggled.connect(self._set_fade_others)
         view_row.addWidget(self.fade_others_cb)
+        # The class box covers the canvas wherever it floats, and on a small
+        # screen it reaches the bottom of the view. Off by default: a project
+        # with no class field never needs it at all.
+        self.class_in_bar_cb = QCheckBox("Point class in top bar")
+        self.class_in_bar_cb.setToolTip(
+            "Move the Point class box out of the 3D view and into this bar"
+        )
+        self.class_in_bar_cb.toggled.connect(self._set_class_in_top_bar)
+        view_row.addWidget(self.class_in_bar_cb)
         view_row.addStretch(1)
         view.addLayout(view_row)
 
@@ -874,6 +883,10 @@ class SegFixWidget(QWidget):
         self._lasso_section_mask: np.ndarray | None = None
         self._update_lasso_section_label()
 
+        # Kept so the "Point class" box can be docked in here on request —
+        # it floats over the canvas by default (see _set_class_in_top_bar).
+        self._top_bar_row = top_bar_row
+        self._class_bar_slot = top_bar_row.count()
         top_bar_row.addStretch()
 
         # -- fixing the current tree --------------------------------------
@@ -1072,6 +1085,50 @@ class SegFixWidget(QWidget):
         self._class_btns: list[QPushButton] = []
         self._class_codes: list[int] = []
 
+    #: Rows of class buttons before the box scrolls, floating and docked.
+    #: Fewer in the bar: the whole strip grows to its tallest box, and a
+    #: half-height scroll there costs less than pushing the canvas down.
+    CLASS_ROWS_DOCKED = 2
+    CLASS_BAR_W = 360
+
+    def _set_class_in_top_bar(self, docked: bool) -> None:
+        """Move the Point class box between the canvas and the top bar.
+
+        Reparented, not duplicated: one set of buttons, one colour-by-class
+        state, so there is no second copy to keep in step. Floating it is
+        the default — the box is next to the points it labels there — but it
+        covers the view, which on a laptop screen is most of it.
+        """
+        box = getattr(self, "_class_overlay", None)
+        if box is None or docked == self._class_docked:
+            return
+        self._class_docked = docked
+        row_h = self._neighbour_row_height()
+        if docked:
+            rows = self.CLASS_ROWS_DOCKED
+            box.setParent(None)
+            box.setStyleSheet("")  # a plain group box, like its neighbours
+            # A constant width, like the section boxes beside it: left to
+            # the layout the box is squeezed to whatever is spare and the
+            # class names elide. Wider than it floats, because two buttons
+            # sit side by side and the bar has room the canvas doesn't.
+            box.setFixedWidth(self.CLASS_BAR_W)
+            self._top_bar_row.insertWidget(self._class_bar_slot, box)
+        else:
+            rows = self.CLASS_ROWS
+            self._top_bar_row.removeWidget(box)
+            box.setParent(self.c.view.native)
+            box.setFixedWidth(self.OVERLAY_W)
+            self._apply_overlay_theme(theme.current())
+        self.class_scroll.setFixedHeight(rows * row_h + (rows - 1) * 4)
+        box.show()
+        if not docked:
+            box.raise_()
+            self._position_current_tree_overlay()
+
+    #: True while the box is docked in the top bar rather than floating.
+    _class_docked = False
+
     def _on_setup_classes(self) -> None:
         if self.on_setup_classes is not None:
             self.on_setup_classes()
@@ -1123,8 +1180,9 @@ class SegFixWidget(QWidget):
             self.class_info.setText(
                 "No class field - Set up… to edit leaf, wood, ground…"
             )
-        self._class_overlay.adjustSize()
-        self._position_current_tree_overlay()
+        if not self._class_docked:
+            self._class_overlay.adjustSize()
+            self._position_current_tree_overlay()
 
     def _on_color_by_class(self, checked: bool) -> None:
         self.c.color_by_class = checked
@@ -1221,6 +1279,8 @@ class SegFixWidget(QWidget):
                     getattr(self, "_class_overlay", None)):
             if box is None:
                 continue
+            if box is getattr(self, "_class_overlay", None) and self._class_docked:
+                continue  # docked in the bar: styled like the boxes beside it
             name = box.objectName()
             box.setStyleSheet(
                 f"QGroupBox#{name} {{"
@@ -1500,7 +1560,7 @@ class SegFixWidget(QWidget):
         x = max(margin, native.width() - box.width() - margin)
         box.move(x, margin)
         classes = getattr(self, "_class_overlay", None)
-        if classes is not None:
+        if classes is not None and not self._class_docked:
             classes.move(x, margin + box.height() + 6)
 
     def on_toggle_lasso(self, checked: bool) -> None:

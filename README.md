@@ -367,6 +367,12 @@ a tree's fade still applies. **New class…** adds a class numbered one above
 the rest and gives it to the selection, if there is one. Class edits undo and
 redo along with the tree edits, in the order they were made.
 
+The box floats over the 3D view, under **Current tree**, which on a laptop
+screen is most of the view. **Point class in top bar** in the **View** group
+moves it into the top strip instead, beside Cross section and Lasso section —
+the same box with the same buttons, not a second copy. It floats by default,
+since a project with no class field never needs it.
+
 **Save** writes only the class values that changed, like the tree IDs, so
 every other byte of the file stays as it was. In LAS point formats 0–5 the
 classification is the low five bits of a byte it shares with the synthetic,
