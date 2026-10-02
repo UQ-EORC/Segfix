@@ -1424,6 +1424,15 @@ class SegFixWidget(QWidget):
             "double-click again while inside to move. Scroll to pull back out."
         )
         self.inside_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Lit while it is on, like the Interaction mode buttons: this one
+        # changes how the whole canvas is projected, and a flat toolbutton
+        # looks identical whether you are standing in the cloud or outside
+        # it — the only other clue is the picture itself.
+        self.inside_btn.setStyleSheet(
+            "QToolButton:checked { background: #1f4a52; color: #8fe8e0; "
+            "font-weight: bold; border: 1px solid #8fe8e0; "
+            "border-radius: 3px; }"
+        )
         self.inside_btn.toggled.connect(self._on_inside_view)
         inside.addWidget(self.inside_btn)
         inside.addWidget(QLabel("FOV"))
@@ -1436,6 +1445,7 @@ class SegFixWidget(QWidget):
             "wide shows what is around you"
         )
         self.fov_spin.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.fov_spin.setEnabled(False)  # nothing to widen from outside
         self.fov_spin.valueChanged.connect(self.c.view.set_inside_fov)
         inside.addWidget(self.fov_spin)
         inside.addStretch(1)
@@ -1454,6 +1464,7 @@ class SegFixWidget(QWidget):
         is double-click the spot, then Inside.
         """
         view = self.c.view
+        self.fov_spin.setEnabled(inside)
         if not inside:
             view.leave_inside_view()
             view.status = "Back to the orthographic view"
@@ -1476,6 +1487,7 @@ class SegFixWidget(QWidget):
             self.inside_btn.blockSignals(True)
             self.inside_btn.setChecked(inside)
             self.inside_btn.blockSignals(False)
+            self.fov_spin.setEnabled(inside)
 
     def _position_current_tree_overlay(self, *_event) -> None:
         """Pin the fixed-size "Current tree" box to the canvas' right edge,

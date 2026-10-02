@@ -160,3 +160,16 @@ def test_the_toggle_refuses_an_empty_cloud(panel):
     p.inside_btn.setChecked(True)
     assert not p.inside_btn.isChecked()
     assert not view.inside_view
+
+
+def test_the_inside_toggle_looks_different_while_it_is_on(panel):
+    """It changes how the whole canvas is projected, and a flat toolbutton
+    looks the same inside or out — the FOV spinner follows it too, so the
+    pair reads as one control."""
+    p, _ = panel
+    assert ":checked" in p.inside_btn.styleSheet()
+    assert not p.fov_spin.isEnabled()
+    p.inside_btn.setChecked(True)
+    assert p.fov_spin.isEnabled()
+    p.inside_btn.setChecked(False)
+    assert not p.fov_spin.isEnabled()
