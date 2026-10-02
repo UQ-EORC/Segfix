@@ -138,6 +138,44 @@ dismiss as noise (`X`) are written back as `0` (unassigned), Segfix's own
 alone cannot tell noise from unassigned. (arbor writes a signed `treeID`, so
 this does not apply to its output.)
 
+### Field inventory (stem map) matching
+
+**Inventory ▸ Load Stem Map…** reads a field stem map — a CSV of measured
+trees — draws each one over the cloud as a wireframe cylinder of its DBH and
+height, and ranks the likely matches for the tree under review.
+
+Columns are detected by name (`tree id`/`stem`/`tag`, `x`/`easting`,
+`y`/`northing`, `dbh`/`diameter`, `height`, `species`); DBH in centimetres is
+recognised and converted. Rows without usable coordinates are skipped, so a
+blank line or a totals row costs nothing.
+
+**Alignment.** A stem map is rarely in the cloud's coordinates: it may be in
+a local plot frame, or global but measured with a handheld GPS. Segfix fits
+the shift from the *pattern* of stems — every stem-to-tree offset votes, and
+the winning one is refined — which survives the trees that only one of the
+two has, and a plot-local map against a UTM cloud is just a large shift. The
+dialog reports it in metres ("10 stems within reach · median 0.74 m"), and X
+and Y can be nudged by hand with the cylinders moving as you type.
+
+**Candidates.** For the tree under review, the **Inventory match** table
+ranks stems by position, height *and* DBH together, best first — position
+alone is ambiguous in a closed stand, where the nearest stem is routinely the
+wrong one. The tree's height comes from its points, and its DBH from a circle
+fitted to a slab at breast height; a fit that isn't round enough to trust
+(one side of a trunk, a fork) is shown with "poor fit" and left out of the
+scoring rather than allowed to rank the wrong stem first. The score is 0 for
+a perfect match, and roughly 1 at the edge of tolerance. Selecting a row
+lights that cylinder up in the view, so a ranking can be checked against the
+trunk rather than taken on trust.
+
+**Link** (or double-click a row) records the match: the cylinder turns green,
+the link is saved in the project's `.segfix.json` sidecar beside the Done
+list, and that stem drops out of every other tree's candidates — one stem,
+one tree. **Inventory ▸ Export Matches…** writes the whole plot as
+`tree_id,stem_id,species,matched_by,distance_m,height_diff_m,dbh_diff_m,score,…`,
+with the trees you linked by hand marked `manual` and the rest filled in by a
+greedy one-to-one matching marked `auto`.
+
 ### Large coordinates
 
 Georeferenced clouds (UTM, State Plane, …) have coordinates in the millions,
@@ -406,6 +444,8 @@ point of the same tree *and* class.
 | `registry.py` | on-disk list of recently opened files/projects |
 | `workspace.py` | project folders: copy (or decompress `.laz`→`.las`) an imported file, never touch the source |
 | `startup_ui.py` | startup dialog: pick a recent entry or start a new project |
+| `inventory.py` | field stem maps: CSV → stems, the coordinate fit, candidate ranking, match CSV |
+| `inventory_ui.py` | stem-map loading and the alignment dialog |
 | `classes_ui.py` | Edit ▸ Point Classes…: pick the class field and name its values |
 | `update.py` | update check: a newer PyPI release for an installed copy, new commits for a git checkout |
 | `app.py` | `segfix` CLI entry point |

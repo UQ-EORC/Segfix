@@ -467,7 +467,7 @@ def _build_menus(win, panel, catalog=None, scene=None) -> None:
     from qtpy.QtGui import QActionGroup
     from qtpy.QtWidgets import QApplication
 
-    from . import theme
+    from . import inventory_ui, theme
 
     bar = win.menuBar()
 
@@ -493,6 +493,27 @@ def _build_menus(win, panel, catalog=None, scene=None) -> None:
         edit_menu.addSeparator()
         classes_act = edit_menu.addAction("Point Classes…")
         classes_act.triggered.connect(panel._on_setup_classes)
+
+    # Inventory: a field stem map drawn over the cloud, and which measured
+    # tree each segmented one is (see segfix.inventory).
+    inv_menu = bar.addMenu("&Inventory")
+    load_stems_act = inv_menu.addAction("Load Stem Map…")
+    load_stems_act.triggered.connect(
+        lambda: inventory_ui.load_stem_map(win, panel, catalog)
+    )
+    align_act = inv_menu.addAction("Align to Cloud…")
+    align_act.triggered.connect(
+        lambda: inventory_ui.align_stem_map(win, panel, catalog)
+    )
+    inv_menu.addSeparator()
+    matches_act = inv_menu.addAction("Export Matches…")
+    matches_act.triggered.connect(
+        lambda: inventory_ui.export_matches(win, panel, catalog)
+    )
+    clear_stems_act = inv_menu.addAction("Clear Stem Map")
+    clear_stems_act.triggered.connect(
+        lambda: inventory_ui.clear_stem_map(win, panel)
+    )
 
     pref_menu = bar.addMenu("&Preferences")
     theme_menu = pref_menu.addMenu("Theme")
