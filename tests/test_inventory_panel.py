@@ -267,3 +267,37 @@ def test_clearing_the_map_takes_the_cylinders_with_it(panel):
     p.set_stem_map([], Alignment())
     assert not view.stems.visible
     assert p.inventory_box.isHidden()
+
+
+# -- large coordinates -------------------------------------------------------
+def test_matching_a_raw_georeferenced_cloud_warns_first(panel, monkeypatch, tmp_path):
+    """Coordinates are float32, so a UTM northing is held to about half a
+    metre — coarser than the stem positions and the circle fitted at breast
+    height are built out of. Measured on a synthetic UTM plot, DBH came back
+    20 cm out unshifted against 1 cm with the shift applied, so matching
+    there is matching mush and has to say so."""
+    from segfix import inventory_ui
+    from segfix.model import PointCloud
+
+    p, view = panel
+    utm = view.coords.astype(np.float64) + [204300.0, 7223250.0, 112.0]
+    cloud = PointCloud(coords=utm.astype(np.float32), labels=p.c.cloud.labels)
+    view.load_cloud(cloud)
+    p.c.set_cloud(cloud)
+
+    warned = []
+    monkeypatch.setattr(inventory_ui.QMessageBox, "warning",
+                        lambda *args, **kw: warned.append(args[2]))
+    inventory_ui._warn_if_unshifted(None, p)
+    assert warned and "global shift" in warned[0]
+
+
+def test_a_shifted_cloud_is_not_warned_about(panel, monkeypatch):
+    from segfix import inventory_ui
+
+    p, _ = panel
+    warned = []
+    monkeypatch.setattr(inventory_ui.QMessageBox, "warning",
+                        lambda *args, **kw: warned.append(args[2]))
+    inventory_ui._warn_if_unshifted(None, p)
+    assert warned == []

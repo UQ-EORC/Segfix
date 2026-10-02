@@ -169,6 +169,7 @@ def load_stem_map(win, panel, catalog) -> None:
         )
         return
 
+    _warn_if_unshifted(win, panel)
     panel.stem_map_path = path
     panel.set_stem_map(stems, inventory.Alignment())
     trees = _tree_stats(panel, catalog)
@@ -182,6 +183,34 @@ def load_stem_map(win, panel, catalog) -> None:
     panel.c.view.status = (
         f"Loaded {len(stems)} stems from {Path(path).name} ({used}). "
         f"{panel.alignment.describe()}"
+    )
+
+
+def _warn_if_unshifted(win, panel) -> None:
+    """Say so when the cloud is still in raw georeferenced coordinates.
+
+    Coordinates are held as float32, which carries about seven digits: a
+    northing of 7,223,250 m is then kept to the nearest half metre, and both
+    the stem positions and the circle fitted at breast height are built out
+    of differences far smaller than that. Matching still runs, but it is
+    matching mush — measured on a synthetic UTM plot, DBH came back 20 cm
+    out against 1 cm with the shift applied. Reopening and accepting the
+    global shift fixes it.
+    """
+    from .treecatalog import needs_global_shift
+
+    coords = panel.c.view.coords
+    if not len(coords):
+        return
+    if not needs_global_shift(coords.min(axis=0), coords.max(axis=0)):
+        return
+    QMessageBox.warning(
+        win, "Large coordinates",
+        "This cloud is still in its original georeferenced coordinates, "
+        "which segfix holds to about half a metre.\n\nStem positions, "
+        "heights and the DBH fitted at breast height will all be imprecise, "
+        "and matching with them is unreliable. Reopen the project and "
+        "accept the global shift it offers.",
     )
 
 

@@ -168,14 +168,31 @@ a perfect match, and roughly 1 at the edge of tolerance. Selecting a row
 lights that cylinder up in the view, so a ranking can be checked against the
 trunk rather than taken on trust.
 
-To try it without field data, `scripts/make_stem_map.py` writes a synthetic
-stem map for a cloud you already have — with the errors that make matching
+To try it without field data, `scripts/make_test_set.py` writes a set of
+synthetic plots with matching inventory — an open plot, a closed canopy
+where the nearest stem is often the wrong one, a 15° slope, leaning stems,
+and a georeferenced plot that also triggers the large-coordinate and dense
+prompts. Each comes with the truth it was built from and two stem maps (one
+plot-local), and `--check` scores the matching against that truth:
+
+```bash
+python scripts/make_test_set.py ~/segfix_test_data --check
+```
+
+For a cloud you already have, `scripts/make_stem_map.py` writes a synthetic
+stem map for it — with the errors that make matching
 real work: positions metres out, optionally in a local plot frame, heights a
 few per cent off, trees the crew missed and stems the scan never saw.
 
 ```bash
 python scripts/make_stem_map.py plot.las stems.csv --local --jitter 1.0
 ```
+
+Matching needs the cloud's coordinates near the origin: they are held as
+32-bit floats, so a raw UTM northing is kept only to about half a metre,
+which is coarser than the stem positions and the circle fit are built out
+of. Loading a stem map against an unshifted georeferenced cloud says so —
+reopen and accept the global shift.
 
 **Link** (or double-click a row) records the match: the cylinder turns green,
 the link is saved in the project's `.segfix.json` sidecar beside the Done
