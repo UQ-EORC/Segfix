@@ -154,6 +154,20 @@ def test_the_fit_survives_trees_only_one_side_has():
     assert fit.matched >= 14
 
 
+def test_a_small_plot_with_real_position_error_still_lines_up():
+    """Found by testing against a generated stem map: a dozen trees give the
+    true shift only a handful of votes, and with a metre of position error a
+    bin boundary splits them — leaving an accidental alignment of three
+    wrong pairs with more votes than the right answer. Several bins are
+    refined now, and only the true one pulls the whole plot in."""
+    trees = plot_trees(n=12, seed=4)
+    stems = stems_from(trees[:10], dx=204295.9, dy=7223245.0, jitter=1.0, seed=5)
+    fit = inventory.fit_shift(stems, trees)
+    assert fit.dx == pytest.approx(204295.9, abs=1.0)
+    assert fit.dy == pytest.approx(7223245.0, abs=1.0)
+    assert fit.matched >= 8
+
+
 def test_the_residual_reports_how_well_it_landed():
     trees = plot_trees()
     loose = inventory.fit_shift(stems_from(trees, dx=5, dy=5, jitter=0.8), trees)
@@ -255,6 +269,17 @@ def test_a_plot_with_fewer_stems_leaves_trees_unmatched():
     stems = stems_from(trees[:4], jitter=0.1)
     matched = inventory.match_all(trees, stems)
     assert len(matched) == 4
+
+
+def test_a_hopeless_pair_is_left_unmatched():
+    """What is left at the end of a greedy pass is the trees nobody measured
+    and the stems nobody scanned. Pairing those off would export confident
+    nonsense, so a pair scoring worse than the cut is simply not made."""
+    trees = [TreeStats(1, 0.0, 0.0, height=20.0, dbh=0.4)]
+    stranger = Stem("measured-elsewhere", 11.0, 0.0, dbh=0.1, height=5.0)
+    assert inventory.match_all(trees, [stranger]) == {}
+    # It is still offered in the panel's ranking, where a person decides.
+    assert inventory.candidates(trees[0], [stranger])[0].stem is stranger
 
 
 def test_the_match_csv_has_a_row_per_tree(tmp_path):

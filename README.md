@@ -168,6 +168,15 @@ a perfect match, and roughly 1 at the edge of tolerance. Selecting a row
 lights that cylinder up in the view, so a ranking can be checked against the
 trunk rather than taken on trust.
 
+To try it without field data, `scripts/make_stem_map.py` writes a synthetic
+stem map for a cloud you already have — with the errors that make matching
+real work: positions metres out, optionally in a local plot frame, heights a
+few per cent off, trees the crew missed and stems the scan never saw.
+
+```bash
+python scripts/make_stem_map.py plot.las stems.csv --local --jitter 1.0
+```
+
 **Link** (or double-click a row) records the match: the cylinder turns green,
 the link is saved in the project's `.segfix.json` sidecar beside the Done
 list, and that stem drops out of every other tree's candidates — one stem,

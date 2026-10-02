@@ -113,6 +113,13 @@ class Tolerances:
     dbh: float = 0.04
     #: Beyond this, a stem is not a candidate for the tree at all.
     max_distance: float = 15.0
+    #: Score above which :func:`match_all` leaves a tree unmatched rather
+    #: than claiming the least-bad stem left over. The ranking in the panel
+    #: has no such cut — showing a poor candidate costs nothing, since a
+    #: person is reading it — but an exported row is an assertion that the
+    #: two are the same tree, and the leftovers at the end of a greedy pass
+    #: are exactly where that goes wrong.
+    max_score: float = 2.0
     #: Circle-fit residual above which a tree's DBH is shown but not scored
     #: on — see :data:`segfix.analysis.GOOD_FIT`. A third of a trunk fits a
     #: third of its diameter, and ranking on that is worse than not ranking
@@ -256,41 +263,58 @@ def fit_shift(
     stems: Sequence[Stem],
     trees: Sequence[TreeStats],
     tolerance: float = 2.0,
-    bin_size: float = 1.0,
+    bin_size: float | None = None,
+    candidates_tried: int = 5,
 ) -> Alignment:
     """Find the translation that puts ``stems`` onto ``trees``.
 
     By vote, then refinement. Every stem→tree difference vector is a
     candidate shift; the true one is proposed once per correctly paired
-    tree, while wrong pairings scatter, so the fullest bin of a 2D histogram
-    of those vectors is the answer to within ``bin_size``. The winning bin's
-    pairs are then averaged for a continuous shift, twice, each time
-    re-pairing every stem with its nearest tree.
+    tree, while wrong pairings scatter, so a 2D histogram of those vectors
+    peaks at the answer. Each of the fullest few bins is then refined —
+    re-pair every stem with its nearest tree, average the offsets of the
+    pairs that landed, repeat — and the refined shift that pairs up the most
+    stems wins, ties broken by the tighter median.
 
-    This is robust where a least-squares fit of the two centroids is not:
-    the sets rarely cover the same trees (a stem map has trees the scan
-    missed and vice versa), and a centroid moves with every one of those.
-    Returns a zero :class:`Alignment` when either side is empty.
+    Trying several bins rather than only the fullest matters on a small plot
+    with real position error: a dozen trees give the true shift only a
+    handful of votes, which a bin boundary can split in two and an accidental
+    alignment of three wrong pairs can beat. Refinement tells them apart,
+    because only the true one pulls the whole plot into place.
+
+    This is also why it isn't a least-squares fit of the two centroids: the
+    sets rarely cover the same trees (a stem map has trees the scan missed
+    and vice versa), and a centroid moves with every one of those. Returns a
+    zero :class:`Alignment` when either side is empty.
     """
     stem_xy = np.array([[s.x, s.y] for s in stems], dtype=float)
     tree_xy = np.array([[t.x, t.y] for t in trees], dtype=float)
     if not len(stem_xy) or not len(tree_xy):
         return Alignment()
+    if bin_size is None:
+        bin_size = tolerance
 
-    # Every pairwise difference, binned. Capped: a 2000-stem map against a
-    # 2000-tree plot is 4M vectors, which is still a blink, but the cap
-    # keeps the memory flat on anything larger.
     offsets = (tree_xy[None, :, :] - stem_xy[:, None, :]).reshape(-1, 2)
     keys = np.round(offsets / bin_size).astype(np.int64)
     _, inverse, counts = np.unique(
         keys, axis=0, return_inverse=True, return_counts=True
     )
-    best = int(np.argmax(counts))
-    shift = offsets[inverse == best].mean(axis=0)
+    best: Alignment | None = None
+    for bin_index in np.argsort(counts)[::-1][:max(1, candidates_tried)]:
+        shift = offsets[inverse == bin_index].mean(axis=0)
+        for _ in range(3):
+            shift = _refine_shift(stem_xy + shift, tree_xy, tolerance) + shift
+        fit = _alignment_for(stem_xy, tree_xy, shift, tolerance)
+        if best is None or _better(fit, best):
+            best = fit
+    return best
 
-    for _ in range(2):
-        shift = _refine_shift(stem_xy + shift, tree_xy, tolerance) + shift
-    return _alignment_for(stem_xy, tree_xy, shift, tolerance)
+
+def _better(fit: Alignment, than: Alignment) -> bool:
+    """More stems paired up wins; the same number, tighter wins."""
+    if fit.matched != than.matched:
+        return fit.matched > than.matched
+    return fit.residual < than.residual
 
 
 def _nearest(points: np.ndarray, targets: np.ndarray):
@@ -409,6 +433,12 @@ def match_all(
     for two mediocre ones somewhere else, which is the wrong answer to give
     someone checking a plot tree by tree — here, the pair the operator can
     see is best stays best.
+
+    Pairs scoring worse than :attr:`Tolerances.max_score` are left out: at
+    the end of a greedy pass what remains is the trees nobody measured and
+    the stems that were never scanned, and pairing those off produces
+    confident nonsense — a stem measured outside the scan matched to
+    whichever tree it happens to be nearest.
     """
     ranked: list[tuple[float, int, Candidate]] = []
     for tree in trees:
@@ -421,7 +451,9 @@ def match_all(
     taken_trees: set[int] = set()
     taken_stems: set[str] = set()
     matched: dict[int, Candidate] = {}
-    for _, tree_id, candidate in ranked:
+    for score, tree_id, candidate in ranked:
+        if score > tolerances.max_score:
+            break  # ranked worst-last, so nothing after this is any better
         if tree_id in taken_trees or candidate.stem.stem_id in taken_stems:
             continue
         matched[tree_id] = candidate
