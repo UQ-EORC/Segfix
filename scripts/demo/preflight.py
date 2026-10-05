@@ -51,7 +51,7 @@ import numpy as np  # noqa: E402
 from qtpy.QtWidgets import QApplication  # noqa: E402
 
 #: Names the storyboard binds to, and what they are.
-TARGETS = ("panel", "scene", "view", "d", "win")
+TARGETS = ("panel", "scene", "view", "d", "win", "align")
 
 #: Attributes reached through a stand-in rather than a real object, or
 #: created by the storyboard itself, so there is nothing to check them on.
@@ -61,6 +61,7 @@ SKIP = {
     "view": set(),
     "panel": set(),
     "scene": set(),
+    "align": set(),
 }
 
 
@@ -181,6 +182,11 @@ def main() -> int:
     check("panel", panel, used["panel"])
     check("view", view, used["view"])
     check("scene", scene, used["scene"])
+    if used["align"]:
+        from segfix import inventory, inventory_ui
+
+        panel.set_stem_map([inventory.Stem("S1", 0.0, 0.0, 0.3, 12.0)])
+        check("align", inventory_ui.AlignDialog(panel, [], None), used["align"])
     for name in sorted(used["d"]):
         if not any(hasattr(d, name) for d in dialogs):
             problems.append(f"dialog.{name}")

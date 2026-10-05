@@ -90,12 +90,12 @@ class AlignDialog(QDialog):
         row.addStretch(1)
         layout.addLayout(row)
 
-        buttons = QDialogButtonBox(
+        self.buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
         self._apply()
 
     def _spin(self, value: float) -> QDoubleSpinBox:

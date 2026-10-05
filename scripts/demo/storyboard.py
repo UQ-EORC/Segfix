@@ -18,14 +18,24 @@ Pacing rules, applied everywhere:
 
 from __future__ import annotations
 
+import os
 import types
 
 import numpy as np
 from qtpy.QtCore import QPoint, QPointF, Qt, QTimer
 from qtpy.QtWidgets import QAbstractButton, QMessageBox, QToolButton
 
+from segfix import inventory, inventory_ui
+
 from make_video import handles, main_ready, table_row_for
 from recorder import find, outline_around
+
+#: The stem map the inventory chapter loads, written by run_recording.sh
+#: next to the demo cloud (scripts/make_stem_map.py).
+STEM_MAP = os.environ.get("SEGFIX_DEMO_STEMS", "/tmp/segfix-demo/stems.csv")
+
+#: Class codes make_sample.py writes: leaf, wood (see classes_for there).
+LEAF, WOOD = 5, 4
 
 READ_WPS = 2.8   # words per second a viewer reads comfortably, beside a moving picture
 SETTLE = 1.6     # seconds to let a result sink in before the next caption
@@ -211,6 +221,15 @@ def selected_trees(panel):
 def and_list(ids):
     ids = [str(i) for i in ids]
     return ids[0] if len(ids) == 1 else ", ".join(ids[:-1]) + " and " + ids[-1]
+
+
+def class_key(panel, code: int) -> str:
+    """The Ctrl+number that presses a class button, or its name if the class
+    is past the keyed five."""
+    codes = list(panel._class_codes)
+    if code in codes and codes.index(code) < 5:
+        return f"Ctrl+{codes.index(code) + 1}"
+    return panel.c.class_names.get(code, str(code))
 
 
 def finish_the_stand(r, scene, panel, view, per_tree=0.45):
@@ -676,6 +695,99 @@ def full(r):
     yield from select_current(r, panel, view, 11)
     yield 0.6
     yield from click_done(r, panel, view)
+
+    # leaf and wood ---------------------------------------------------------------
+    yield from chapter(r, "Leaf and wood")
+    yield from load_from_all_trees(r, scene, view, 4)
+    yield from select_current(r, panel, view, 4)
+    yield SETTLE
+    yield from say(r, "A cloud can also carry what each point is, not just which tree it "
+                      "belongs to: leaf, wood, ground.")
+    yield from r.move_to(r.wpt(panel.class_color_cb), 0.8)
+    yield from say(r, "Shift+F colours by class instead of by tree. The names come from "
+                      "Edit ▸ Point Classes…, once per project.")
+    yield from key_then(r, "Shift+F", panel.class_color_cb.toggle)
+    yield SETTLE + 0.8
+
+    labels, xyz = panel.c.cloud.labels, view.coords
+    classes = panel.c.cloud.classes
+    g = ground_z(panel, view)
+    stem = trunk_xy(panel, view, 4)
+    # A patch of trunk the classifier called leaf: the band just under the
+    # crown, where a real leaf/wood filter gets it wrong too.
+    mistaken = (
+        (labels == 4) & (classes == LEAF) & (xyz[:, 2] > g + 2.0)
+        & (xyz[:, 2] < g + 3.2)
+        & (np.hypot(xyz[:, 0] - stem[0], xyz[:, 1] - stem[1]) < 0.5)
+    )
+    if mistaken.sum() > 50:
+        yield from say(r, "Where the filter got it wrong, fix it the same way you fix a tree: "
+                          "lasso the points…")
+        yield from r.camera(view, 1.4, center=(float(stem[0]), float(stem[1]), g + 2.6),
+                            scale_factor=6.0)
+        yield from key_then(r, "W", panel.tree_lasso_btn.toggle)
+        yield from r.lasso(panel.c.lasso, outline_around(points_xy(view, mistaken), margin=12),
+                           2.2)
+        yield SETTLE
+        wood_key = class_key(panel, WOOD)
+        yield from say(r, f"…and press {wood_key} for wood. The class buttons work on a "
+                          f"selection exactly as the tree buttons do.")
+        yield from key_then(r, wood_key, lambda: panel.on_set_class(WOOD))
+        yield SETTLE + 0.5
+        yield from key_then(r, "Esc", panel.on_move_mode)
+    yield from say(r, "Class edits undo, redo and save with the tree edits, and only the "
+                      "values that changed are written.")
+    yield from key_then(r, "Shift+F", panel.class_color_cb.toggle)
+    yield from r.smooth(view, view.reset_view, 1.0)
+    yield SETTLE
+
+    # field inventory ---------------------------------------------------------------
+    yield from chapter(r, "Field inventory")
+    yield from say(r, "A plot usually has a stem map long before it has a point cloud: "
+                      "measured positions, DBH and height.")
+    stems, _columns = inventory.load_stem_map(STEM_MAP)
+    trees = inventory.stats_from_records(scene.c.catalog.records)
+    panel.set_stem_map(stems, inventory.Alignment())
+    yield from say(r, f"Inventory ▸ Load Stem Map… reads the CSV. This one has "
+                      f"{len(stems)} stems, in the plot's own local coordinates.")
+    align = inventory_ui.AlignDialog(panel, trees, win)
+    align.show()
+    yield 0.8
+    yield from r.move_to(r.wpt(align.fit_btn), 0.8)
+    yield from say(r, "Segfix finds the shift from the pattern of the stems, so a local map "
+                      "lands on a georeferenced cloud.")
+    yield from r.click(None)
+    align.fit()
+    yield SETTLE + 1.0
+    yield from say(r, align.summary.text().replace("\n", " · "))
+    yield from r.click(r.wpt(align.buttons), 0.6)
+    align.accept()
+    yield SETTLE
+
+    yield from say(r, "Every measured tree is drawn as a cylinder at its DBH and height, so "
+                      "you can see it against the trunk it belongs to.")
+    yield from r.smooth(view, view.reset_view, 1.0)
+    yield from r.drag_camera(view, c + QPointF(-140, 0), c + QPointF(140, 0), 2.2,
+                             azimuth=cam.azimuth + 50)
+    yield SETTLE
+    yield from select_current(r, panel, view, 4)
+    yield 0.8
+    yield from say(r, "For the tree under review, the table ranks the stems it could be, on "
+                      "position, height and DBH together.")
+    yield from r.move_to(r.wpt(panel.inventory_table), 0.8)
+    if panel.inventory_table.rowCount():
+        yield from r.click(None)
+        panel.inventory_table.selectRow(0)
+        yield SETTLE + 0.5
+        yield from say(r, "Picking a row lights that stem up. Link records the match, and the "
+                          "cylinder turns green.")
+        yield from r.move_to(r.wpt(panel.link_btn), 0.8)
+        yield from r.click(None)
+        panel.on_link_stem()
+        yield SETTLE + 0.8
+    yield from say(r, "Inventory ▸ Export Matches… writes the whole plot out as a CSV: which "
+                      "tree is which stem, and how far apart they were.")
+    yield SETTLE
 
     # the rest of the plot ----------------------------------------------------------
     yield from chapter(r, "The rest of the plot")

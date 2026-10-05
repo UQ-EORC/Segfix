@@ -32,10 +32,24 @@ XDG_CONFIG_HOME="$WORK/config" $PY - <<PY || exit 1
 from pathlib import Path
 from segfix import registry, workspace
 ws = Path("$WORK/projects/example_utm")
-workspace.create_workspace("$WORK/example_utm.las", ws)
+data = workspace.create_workspace("$WORK/example_utm.las", ws)
+# Name the classes the sample cloud carries, as a project would have been
+# told once through Edit > Point Classes: the walkthrough shows editing
+# them, not setting them up.
+workspace.remember(
+    data, class_field="classification",
+    class_names={"2": "ground", "4": "wood", "5": "leaf", "7": "noise"},
+)
 registry.add_entry(str(ws), kind="workspace")
 print("project reset")
 PY
+
+# The field inventory chapter needs a stem map for this plot: positions a
+# metre out, in the plot's own local coordinates, as a crew would hand over.
+if [ ! -s "$WORK/stems.csv" ]; then
+  $PY "$REPO/scripts/make_stem_map.py" "$WORK/example_utm.las" "$WORK/stems.csv" \
+      --local --jitter 0.8 --missing 2 --extra 1 | head -1
+fi
 free -h | sed -n 2p
 
 start=$(date +%s)

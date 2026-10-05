@@ -101,7 +101,7 @@ _BOUNDS = ((-4.0, 35.0), (-4.0, 26.0))
 # The rest of the stand: trees with nothing wrong with them, filling the plot
 # so it reads as a piece of forest rather than a dozen specimens on a lawn.
 # They get IDs from 13 up, after the ones the errors above are pinned to.
-_STAND_COUNT = 22
+_STAND_COUNT = 10
 #: How much clear air a new tree's crown must leave around every tree already
 #: placed. Enough that it never joins one of their neighbour sets: the
 #: walkthrough loads tree 1 and talks about the two trees that touch it, and a
@@ -331,7 +331,49 @@ def facing_band(pts, xy, height, toward, half_angle=50.0, band=(0.5, 0.8)):
     return facing & in_band & (r > 0.3)  # crown only, not the stem
 
 
-def _write_las(coords: np.ndarray, labels: np.ndarray, out: str) -> None:
+#: ASPRS-ish codes for the class column, which segfix reads as point
+#: classes: the names are the operator's to set, these are the values.
+CLASS_GROUND, CLASS_WOOD, CLASS_LEAF, CLASS_NOISE = 2, 4, 5, 7
+
+#: How far from a stem a point can be and still be wood. A scanned trunk is
+#: a few centimetres of bark; this is generous enough to catch the lower
+#: branches that grow straight out of it.
+_WOOD_RADIUS = 0.35
+
+#: One deliberate leaf/wood mistake, in the spirit of the tree-ID errors
+#: above: a metre of tree 4's trunk that the filter called leaf, for
+#: practising the class edits on. ``(tree id, (z from, z to))``.
+_CLASS_ERROR = (4, (2.0, 3.2))
+
+
+def classes_for(coords: np.ndarray, labels: np.ndarray, stems: dict) -> np.ndarray:
+    """A leaf/wood/ground class per point.
+
+    Wood is what stands within :data:`_WOOD_RADIUS` of its own tree's stem,
+    leaf is the rest of the tree, and the ground keeps the ASPRS code a
+    ground filter would have given it. Deliberately imperfect at the top of
+    each stem, where the crown closes around it: a class column nobody would
+    want to correct makes a poor demonstration of correcting one.
+    """
+    out = np.full(len(coords), CLASS_LEAF, dtype=np.uint8)
+    out[labels == UNASSIGNED] = CLASS_GROUND
+    out[labels == NOISE] = CLASS_NOISE
+    for tid, (sx, sy) in stems.items():
+        mine = labels == tid
+        if not mine.any():
+            continue
+        near = np.hypot(coords[mine, 0] - sx, coords[mine, 1] - sy) <= _WOOD_RADIUS
+        idx = np.flatnonzero(mine)
+        out[idx[near]] = CLASS_WOOD
+
+    error_id, (z0, z1) = _CLASS_ERROR
+    band = (labels == error_id) & (coords[:, 2] >= z0) & (coords[:, 2] <= z1)
+    out[band & (out == CLASS_WOOD)] = CLASS_LEAF
+    return out
+
+
+def _write_las(coords: np.ndarray, labels: np.ndarray, out: str,
+               classes: np.ndarray | None = None) -> None:
     """Write an arbor-shaped LAS/LAZ: XYZ + an int ``treeID`` Extra-Bytes
     column (``0`` = unassigned, as arbor writes it)."""
     import laspy
@@ -347,6 +389,8 @@ def _write_las(coords: np.ndarray, labels: np.ndarray, out: str) -> None:
     las.x, las.y, las.z = coords[:, 0], coords[:, 1], coords[:, 2]
     tid = np.where(labels == NOISE, UNASSIGNED, labels)  # LAS has no noise id
     las.treeID = tid.astype(np.int32)
+    if classes is not None:
+        las.classification = classes
     las.write(out)
 
 
@@ -365,6 +409,7 @@ def main(out, spacing=None, origin=None):
         return dense_tree(center, height=height, radius=radius, spacing=spacing, rng=rng)
 
     trunks = []  # every stem, for where the ground goes
+    stems = {}   # tree id -> stem xy, for the leaf/wood classes
 
     # The error cases are placed first and the rest of the stand fills in
     # around them, so their neighbours stay exactly as the walkthrough
@@ -387,10 +432,12 @@ def main(out, spacing=None, origin=None):
         else:
             add(pts, tid)
         trunks.append(xy)
+        stems[tid] = xy
 
     for tid, xy, h, r in extra:
         add(make(xy, h, r), tid)
         trunks.append(xy)
+        stems[tid] = xy
 
     # Over-segmented: one physical tree split by height into two IDs.
     (low_id, high_id), xy, h, r, split = _OVER_SEGMENTED
@@ -398,17 +445,20 @@ def main(out, spacing=None, origin=None):
     add(t[t[:, 2] < split * h], low_id)
     add(t[t[:, 2] >= split * h], high_id)
     trunks.append(xy)
+    stems[low_id] = stems[high_id] = xy
 
     # Under-segmented: two physical trees, one ID.
     tid, members = _UNDER_SEGMENTED
     for xy, h, r in members:
         add(make(xy, h, r), tid)
         trunks.append(xy)
+        stems.setdefault(tid, xy)
 
     # Leaked into the ground: a tree, plus (below) a patch of ground with its ID.
     leak_id, xy, h, r = _LEAKY
     add(make(xy, h, r), leak_id)
     trunks.append(xy)
+    stems[leak_id] = xy
 
     # False positive: a bush that got its own tree ID.
     bush_id, xy, bh, br = _BUSH
@@ -416,6 +466,7 @@ def main(out, spacing=None, origin=None):
     add(bush(center, bh, br, rng=rng) if spacing is None
         else dense_bush(center, bh, br, spacing=spacing, rng=rng), bush_id)
     trunks.append(xy)
+    stems[bush_id] = xy
 
     # Ground, with the leaked patch carrying tree 11's ID, and stray noise.
     if spacing is None:
@@ -437,8 +488,10 @@ def main(out, spacing=None, origin=None):
         coords += np.asarray(origin, dtype=np.float64)
     labels = np.concatenate(labels)
 
+    classes = classes_for(coords - np.asarray(origin or (0, 0, 0), dtype=np.float64),
+                          labels, stems)
     if os.path.splitext(out)[1].lower() in (".las", ".laz"):
-        _write_las(coords, labels, out)
+        _write_las(coords, labels, out, classes)
         n_points = len(coords)
         tree_ids = sorted(set(labels.tolist()) - {UNASSIGNED, NOISE})
     else:
