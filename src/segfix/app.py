@@ -682,6 +682,7 @@ def _run_scene(args) -> int:
     from .density_ui import prompt_downsample
     from .icons import app_icon
     from .model import PointCloud
+    from .negative_ui import prompt_negative_labels
     from .overlays import ScaleBarOverlay
     from .progress_ui import run_with_progress
     from .scene_ui import SceneController, SceneWidget
@@ -775,6 +776,8 @@ def _run_scene(args) -> int:
             density_prompt=lambda spacing, n_points, suggested, kept_fraction:
                 ask(prompt_downsample, win, spacing, n_points, suggested,
                     kept_fraction),
+            negative_prompt=lambda n_points:
+                ask(prompt_negative_labels, win, n_points),
             progress=report,
         )
 

@@ -85,6 +85,14 @@ DensityPrompt = Callable[
     [float, int, float, "Callable[[float], float | None]"], "float | None"
 ]
 
+#: ``(n_points) -> "unassigned" | "noise"`` — what the file's ``-1`` labels
+#: mean. segfix writes ``-1`` for points dismissed as noise, while Sylva and
+#: several other pipelines write it for every point no tree claimed, and the
+#: two cannot be told apart by looking. Wired to a Qt dialog by the app;
+#: omitting it keeps segfix's own reading, so headless callers and tests are
+#: unaffected.
+NegativePrompt = Callable[[int], str]
+
 #: ``(message, fraction) -> None``, fraction 0..1 — where a long open or save
 #: has got to. Wired to a progress window by the app; omitting it (the
 #: default) reports nothing, so headless callers and tests are unaffected.
@@ -243,9 +251,16 @@ class _BaseCatalog:
         density_prompt: DensityPrompt | None = None,
         progress: ProgressFn | None = None,
         class_field: str | None = None,
+        negative_prompt: "NegativePrompt | None" = None,
+        negative_means: str | None = None,
     ):
         self.path = path
         self._label_field_req = label_field
+        self._negative_prompt = negative_prompt
+        #: What ``-1`` in the file means: "noise" (segfix's own) or
+        #: "unassigned" (Sylva and friends). Settled on open by
+        #: :meth:`_resolve_negative_labels`.
+        self.negative_means = negative_means
         report = _PhaseReporter(progress)
         # Subclass fills in: offset, count, dtype, _names, is_rgb, label_field,
         # and _mm (the memmap of fixed-size point records).
@@ -272,6 +287,7 @@ class _BaseCatalog:
 
         report("Reading tree labels")
         self.labels, self.label_colors = self._read_labels()
+        self._resolve_negative_labels()
 
         # New tree IDs must clear every label in the *file*, including trees
         # that decimation may be about to drop from the working set below.
@@ -625,6 +641,47 @@ class _BaseCatalog:
             )
         return None if chosen is None else np.asarray(chosen, dtype=np.float64)
 
+    def _resolve_negative_labels(self) -> None:
+        """Settle what the file's ``-1`` labels mean, and fold them in.
+
+        segfix writes ``-1`` for a point dismissed as noise. Sylva's
+        ``trees --segment``, and others, write it for every point no stem
+        claimed, which is segfix's *unassigned*. Read the wrong way round, a
+        Sylva plot opens with its whole ground flagged as noise: hidden with
+        F, absent from the grey points the workflow lassoes back into trees.
+
+        Nothing in the file distinguishes them, so it is asked once per
+        project and remembered. Without a prompt (headless, tests, a cloud
+        segfix wrote itself) the answer stays segfix's own reading.
+        """
+        if not self.labels.size:
+            return
+        negatives = int(np.count_nonzero(self.labels == NOISE))
+        if not negatives:
+            return
+
+        from . import workspace
+
+        if self.negative_means is None:
+            decided = workspace.settings(self.path)
+            if "negative_means" in decided:
+                self.negative_means = decided["negative_means"]
+            elif self._negative_prompt is not None:
+                self.negative_means = self._negative_prompt(negatives)
+                workspace.remember(self.path, negative_means=self.negative_means)
+        if self.negative_means != "unassigned":
+            self.negative_means = "noise"
+            return
+        # Held as segfix's own unassigned from here on; _write_labels puts
+        # -1 back for both when saving, which is what the file meant by it.
+        self.labels[self.labels == NOISE] = UNASSIGNED
+
+    @property
+    def writes_negative_for_unassigned(self) -> bool:
+        """True when the file uses ``-1`` for every point with no tree, so
+        that is what saving writes for unassigned *and* noise alike."""
+        return self.negative_means == "unassigned"
+
     def _shift_and_cast(self, raw: np.ndarray) -> np.ndarray:
         if self.global_shift is not None:
             raw = raw + self.global_shift
@@ -648,6 +705,20 @@ class _BaseCatalog:
 
     def _write_labels(self, out, changed: np.ndarray, values: np.ndarray) -> None:
         raise NotImplementedError  # pragma: no cover - abstract
+
+    def _as_file_labels(self, values: np.ndarray) -> np.ndarray:
+        """Labels as this file spells them.
+
+        Where ``-1`` was the file's "no tree" (see
+        :meth:`_resolve_negative_labels`), both unassigned and noise go back
+        as ``-1``: that is the only thing the file can say, and saying ``0``
+        instead would hand the reader a tree numbered zero. Which points
+        segfix dismissed as noise stays in its own sidecar, as it already
+        does for an unsigned label column.
+        """
+        if not self.writes_negative_for_unassigned:
+            return values
+        return np.where(values == UNASSIGNED, NOISE, values)
 
     def _raw_label_codes(self, sub) -> np.ndarray:
         """The label each record carries *as the file stores it*, as integers.
@@ -1153,7 +1224,7 @@ class TreeCatalog(_BaseCatalog):
             out[self._names["green"]][changed] = colour[:, 1]
             out[self._names["blue"]][changed] = colour[:, 2]
         else:
-            out[self.label_field][changed] = values
+            out[self.label_field][changed] = self._as_file_labels(values)
 
     def _raw_label_codes(self, sub) -> np.ndarray:
         if not self.is_rgb:
@@ -1270,6 +1341,7 @@ class LasCatalog(_BaseCatalog):
             # still remembers which points were dismissed as noise, but a
             # reader of the LAS alone (arbor, lidR) sees them as unassigned.
             values = np.where(values == NOISE, UNASSIGNED, values)
+        values = self._as_file_labels(values)
         out[self.label_field][changed] = values.astype(self.dtype[self.label_field])
 
     @contextmanager
@@ -1343,6 +1415,8 @@ def open_catalog(
     density_prompt: DensityPrompt | None = None,
     progress: ProgressFn | None = None,
     class_field: str | None = None,
+    negative_prompt: "NegativePrompt | None" = None,
+    negative_means: str | None = None,
 ) -> _BaseCatalog:
     """Open ``path`` with the backend its extension calls for.
 
@@ -1373,6 +1447,8 @@ def open_catalog(
         density_prompt=density_prompt,
         progress=progress,
         class_field=class_field,
+        negative_prompt=negative_prompt,
+        negative_means=negative_means,
     )
     if ext == ".ply":
         return TreeCatalog(path, **kwargs)

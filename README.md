@@ -132,23 +132,21 @@ colour derived from their id.
 numbered from 1, and `-1` for every point no stem claimed. Segfix finds
 `tree_id` on its own, so the file opens as it is.
 
-One thing to do first. Segfix reads `-1` as its own **noise** marker, not as
-unassigned, so Sylva's ground and understorey arrive flagged as noise rather
-than as the grey unassigned points the workflow expects. Map them across
-before opening, and back afterwards:
+Segfix writes `-1` for a point it has **dismissed as noise**, so the first
+time it opens a cloud with `-1` labels it asks what they mean there:
+**Unassigned** (Sylva, and most other segmentation tools) or **Noise**
+(a cloud Segfix saved, opened without its project folder). The answer is
+remembered with the project, and whichever way it was read, `-1` is what
+goes back to the file on save: Sylva reads `0` as a tree numbered zero, so
+unassigned has to go home the way it arrived. Which points you dismissed as
+noise stays in Segfix's own `.segfix.json` sidecar, since the file has only
+one way to say "no tree".
 
-```python
-import numpy as np, sylva
+So a Sylva plot needs nothing done to it:
 
-cloud = sylva.read("plot_segmented.laz")
-ids = cloud.attrs["tree_id"]
-sylva.write(cloud.with_attrs(tree_id=np.where(ids > 0, ids, 0).astype("int32")),
-            "plot_for_segfix.laz")
-#   segfix  ->  open plot_for_segfix.laz, fix the trees, save
-
-fixed = sylva.read("plot_for_segfix.laz")
-back = fixed.attrs["tree_id"]
-labels = np.where(back > 0, back, -1)   # 0 and -1 both mean "no tree" to Sylva
+```bash
+sylva trees --segment plot.laz      # writes plot_segmented.laz
+segfix                              # open it, answer "Unassigned", fix, save
 ```
 
 Sylva's other two columns are useful here as well. `classification` from its
@@ -535,6 +533,7 @@ point of the same tree *and* class.
 | `treecatalog.py` | default mode: memory-mapped tree-label grouping, neighbour load + write-back (`TreeCatalog` = PLY, `LasCatalog` = LAS, `open_catalog` picks) |
 | `scene_ui.py` | tree table + scene controller for the default mode |
 | `shift_ui.py` | load-time "large coordinates" (global shift) prompt |
+| `negative_ui.py` | load-time "what does a tree ID of -1 mean here" prompt |
 | `density_ui.py` | load-time "dense cloud" (downsample) prompt |
 | `progress_ui.py` | progress window for the two slow operations, opening and saving |
 | `registry.py` | on-disk list of recently opened files/projects |
