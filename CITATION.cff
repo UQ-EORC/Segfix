@@ -11,5 +11,5 @@ authors:
 repository-code: "https://github.com/UQ-EORC/Segfix"
 url: "https://pypi.org/project/segfix/"
 license: GPL-3.0-or-later
-version: 1.0.12
-date-released: "2026-09-24"
+version: 1.1.0
+date-released: "2026-10-05"
