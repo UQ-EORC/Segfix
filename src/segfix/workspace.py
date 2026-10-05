@@ -155,6 +155,43 @@ def create_workspace(
     return dest
 
 
+def create_from_files(
+    sources,
+    workspace_dir: str | Path,
+    report: ProgressFn | None = None,
+) -> Path:
+    """Merge a set of per-tree files (:class:`segfix.merge.Source`) into one
+    working copy in a new ``workspace_dir``, and return its path.
+
+    The per-tree counterpart of :func:`create_workspace`: same folder, same
+    manifest, same guarantee that nothing is written back to the inputs —
+    only the copy is one cloud built out of many, with each file's tree ID
+    (from its name or a mapping CSV) written per point. The manifest records
+    every source and the ID it was given, so a project can say what it was
+    built from long after the import.
+    """
+    from . import merge
+
+    workspace_dir = Path(workspace_dir)
+    if workspace_dir.exists() and any(workspace_dir.iterdir()):
+        raise FileExistsError(f"{workspace_dir} already exists and is not empty")
+    sources = list(sources)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    dest = workspace_dir / (workspace_dir.name + merge.output_suffix(sources))
+    merge.merge(sources, dest, report)
+    manifest = {
+        "source": str(Path(sources[0].path).resolve().parent),
+        "sources": [
+            {"path": str(Path(s.path).resolve()), "tree_id": s.tree_id}
+            for s in sources
+        ],
+        "data_file": dest.name,
+        "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    (workspace_dir / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2))
+    return dest
+
+
 # -- remembered project settings and derived caches --------------------------
 #: Where derived arrays live inside a workspace. Nothing in here is source
 #: data — deleting the folder costs a slower open and nothing else.

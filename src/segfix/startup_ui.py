@@ -78,7 +78,8 @@ class StartupDialog(QDialog):
 
         hint = QLabel(
             "Double-click a recent project, or start a new one by importing "
-            "a point cloud file - a private copy is made in a new project "
+            "a point cloud file - or a set of per-tree files, merged into "
+            "one on the way in. A private copy is made in a new project "
             "folder, and edits are saved to that copy, never the original."
         )
         hint.setWordWrap(True)
@@ -110,6 +111,13 @@ class StartupDialog(QDialog):
         self.new_btn = QPushButton("New Project…")
         self.new_btn.clicked.connect(self._new_project)
         row.addWidget(self.new_btn)
+        self.per_tree_btn = QPushButton("Per-tree Files…")
+        self.per_tree_btn.setToolTip(
+            "Import a folder of one-cloud-per-tree files (raysplit output "
+            "and the like) as a single project, keeping each file's tree ID"
+        )
+        self.per_tree_btn.clicked.connect(self._new_from_per_tree_files)
+        row.addWidget(self.per_tree_btn)
         row.addStretch()
         self.open_btn = QPushButton("Open")
         self.open_btn.clicked.connect(self._on_choose)
@@ -123,7 +131,8 @@ class StartupDialog(QDialog):
         # the top row is already the most recent one. Only the button Enter
         # should press claims autoDefault, or whichever of them last had
         # focus would answer the key instead.
-        for button in (self.new_btn, self.cancel_btn, self.update_btn):
+        for button in (self.new_btn, self.per_tree_btn, self.cancel_btn,
+                       self.update_btn):
             button.setAutoDefault(False)
         has_recent = self.list.count() > 0
         opener = self.open_btn if has_recent else self.new_btn
@@ -207,6 +216,54 @@ class StartupDialog(QDialog):
                 ),
             )
         except Exception as exc:  # OSError, or laspy failing on a bad LAS/LAZ
+            QMessageBox.critical(self, "Import failed", str(exc))
+            return
+
+        self.open_path = str(data_path)
+        self.registry_path = str(candidate)
+        self.kind = "workspace"
+        self.accept()
+
+    def _new_from_per_tree_files(self) -> None:
+        """Import one-cloud-per-tree output as a single project.
+
+        The same shape as :meth:`_new_project` — pick the input, pick where
+        the project folder goes, copy under a bar — except the "copy" is a
+        merge of many files into one, and which tree each file is has to be
+        settled first (:mod:`multi_import_ui`). The format check lives in
+        the dialog, which can't offer Import until the whole set is sound.
+        """
+        from .multi_import_ui import choose_per_tree_files
+
+        sources = choose_per_tree_files(self)
+        if not sources:
+            return
+
+        parent = QFileDialog.getExistingDirectory(
+            self, "Choose where to create the project folder", str(Path.home()),
+        )
+        if not parent:
+            return
+
+        # Named after the folder the trees came out of, which is the only
+        # name the set has — the files themselves are all called tree_<n>.
+        stem = Path(sources[0].path).parent.name or "trees"
+        candidate = Path(parent) / stem
+        suffix = 1
+        while candidate.exists() and any(candidate.iterdir()):
+            suffix += 1
+            candidate = Path(parent) / f"{stem}_{suffix}"
+
+        from .progress_ui import run_with_progress
+
+        try:
+            data_path = run_with_progress(
+                self, "Merging per-tree files", f"{len(sources)} files",
+                lambda report, ask: workspace.create_from_files(
+                    sources, candidate, report=report
+                ),
+            )
+        except Exception as exc:  # OSError, laspy, or a set that won't merge
             QMessageBox.critical(self, "Import failed", str(exc))
             return
 
