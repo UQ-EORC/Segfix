@@ -127,3 +127,18 @@ def test_no_other_button_answers_enter(config):
             assert not button.autoDefault(), button.text()
     finally:
         dlg.done(QDialog.Rejected)
+
+
+def test_the_two_ways_to_start_a_project_are_named_alike(config):
+    """"Per-tree Files…" beside "New Project…" read as a noun beside an
+    action — the only button on the dialog whose label didn't say what
+    pressing it does. Both start a project now, and both say so."""
+    dlg = _dialog()
+    try:
+        assert dlg.new_btn.text().startswith("New")
+        assert dlg.per_tree_btn.text().startswith("New")
+        # Every button that does something non-obvious explains itself.
+        for button in (dlg.new_btn, dlg.per_tree_btn, dlg.open_btn):
+            assert button.toolTip(), button.text()
+    finally:
+        dlg.deleteLater()

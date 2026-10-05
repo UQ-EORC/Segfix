@@ -77,10 +77,11 @@ class StartupDialog(QDialog):
         self._populate()
 
         hint = QLabel(
-            "Double-click a recent project, or start a new one by importing "
-            "a point cloud file - or a set of per-tree files, merged into "
-            "one on the way in. A private copy is made in a new project "
-            "folder, and edits are saved to that copy, never the original."
+            "Double-click a recent project to reopen it, or start a new one "
+            "from a point cloud file - or from a set of per-tree files, "
+            "merged into one on the way in. Either way a private copy is "
+            "made in a new project folder, and edits are saved to that copy, "
+            "never the original."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray;")
@@ -107,11 +108,21 @@ class StartupDialog(QDialog):
         self._update_timer.timeout.connect(self._poll_update_check)
         self._update_timer.start(300)
 
+        # The two ways to start a project sit together on the left, named
+        # as the same kind of thing: one cloud in, or a set of per-tree
+        # clouds merged on the way in. "Per-tree Files…" beside "New
+        # Project…" read as an action and a noun, which is a worse pair than
+        # it looks — it is the only button here whose label doesn't say what
+        # pressing it does.
         row = QHBoxLayout()
         self.new_btn = QPushButton("New Project…")
+        self.new_btn.setToolTip(
+            "Import one point cloud as a new project - a private copy is "
+            "made, and the original is never edited"
+        )
         self.new_btn.clicked.connect(self._new_project)
         row.addWidget(self.new_btn)
-        self.per_tree_btn = QPushButton("Per-tree Files…")
+        self.per_tree_btn = QPushButton("New from Per-tree Files…")
         self.per_tree_btn.setToolTip(
             "Import a folder of one-cloud-per-tree files (raysplit output "
             "and the like) as a single project, keeping each file's tree ID"
@@ -120,6 +131,9 @@ class StartupDialog(QDialog):
         row.addWidget(self.per_tree_btn)
         row.addStretch()
         self.open_btn = QPushButton("Open")
+        self.open_btn.setToolTip(
+            "Reopen the selected project (double-click it, or press Enter)"
+        )
         self.open_btn.clicked.connect(self._on_choose)
         row.addWidget(self.open_btn)
         self.cancel_btn = QPushButton("Cancel")

@@ -142,7 +142,8 @@ this does not apply to its output.)
 
 Plenty of pipelines emit **one file per tree** — raycloudtools' `raysplit`, and
 most per-tree extraction tools — usually with a ground/unassigned cloud beside
-them. **Per-tree Files…** on the startup dialog imports such a set directly:
+them. **New from Per-tree Files…** on the startup dialog imports such a set
+directly:
 pick the files (or a whole folder), and Segfix merges them into one project
 cloud with each file's tree ID written per point, leaving the originals
 untouched.
