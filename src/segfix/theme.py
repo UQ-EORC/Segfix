@@ -155,6 +155,18 @@ def apply(app, mode: str | None = None) -> None:
     global _mode
     _mode = "light" if (mode or load()) == "light" else "dark"
     app.setStyle("Fusion")  # re-set each time: forces a full re-polish
+    # Qt 6.5+ follows the desktop's light/dark preference, and on a
+    # prefer-dark desktop it re-applies the system palette to widgets as
+    # they are created, overriding the one set below: choosing Light then
+    # gave light canvas chrome inside a dark window. Saying which scheme
+    # this app is in stops Qt arguing with it.
+    hints = app.styleHints()
+    if hasattr(hints, "setColorScheme"):
+        from qtpy.QtCore import Qt
+
+        hints.setColorScheme(
+            Qt.ColorScheme.Light if _mode == "light" else Qt.ColorScheme.Dark
+        )
     app.setPalette(_light_palette() if _mode == "light" else _dark_palette())
     _repolish_styled_widgets(app)
     for fn in list(_listeners):

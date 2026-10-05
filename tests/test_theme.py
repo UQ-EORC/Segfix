@@ -84,3 +84,20 @@ def test_a_first_run_is_light():
     with no saved setting gets."""
     assert theme.DEFAULT == "light"
     assert theme.CANVAS_BG[theme.DEFAULT] == "#f2f2f2"
+
+
+def test_qt_is_told_which_scheme_the_app_is_in():
+    """Qt 6.5+ follows the desktop's light/dark preference and re-applies
+    the system palette to widgets as they are created. On a prefer-dark
+    desktop that overrode the light palette: the canvas went light and the
+    window around it stayed dark."""
+    from qtpy.QtCore import Qt
+
+    app = QApplication.instance()
+    hints = app.styleHints()
+    if not hasattr(hints, "setColorScheme"):
+        pytest.skip("Qt too old to have a colour scheme to set")
+    theme.apply(app, "light")
+    assert hints.colorScheme() == Qt.ColorScheme.Light
+    theme.apply(app, "dark")
+    assert hints.colorScheme() == Qt.ColorScheme.Dark

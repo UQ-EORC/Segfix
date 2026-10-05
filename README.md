@@ -124,6 +124,39 @@ so once such a file is reloaded the two are indistinguishable (Segfix's
 project). New trees created during editing (`S`, splits) get a deterministic
 colour derived from their id.
 
+### Sylva output
+
+[Sylva](https://github.com/UQ-EORC/Sylva)'s `sylva trees --segment` writes
+`<cloud>_segmented.laz` (or `.ply`) with a per-point `tree_id` column: trees
+numbered from 1, and `-1` for every point no stem claimed. Segfix finds
+`tree_id` on its own, so the file opens as it is.
+
+One thing to do first. Segfix reads `-1` as its own **noise** marker, not as
+unassigned, so Sylva's ground and understorey arrive flagged as noise rather
+than as the grey unassigned points the workflow expects. Map them across
+before opening, and back afterwards:
+
+```python
+import numpy as np, sylva
+
+cloud = sylva.read("plot_segmented.laz")
+ids = cloud.attrs["tree_id"]
+sylva.write(cloud.with_attrs(tree_id=np.where(ids > 0, ids, 0).astype("int32")),
+            "plot_for_segfix.laz")
+#   segfix  ->  open plot_for_segfix.laz, fix the trees, save
+
+fixed = sylva.read("plot_for_segfix.laz")
+back = fixed.attrs["tree_id"]
+labels = np.where(back > 0, back, -1)   # 0 and -1 both mean "no tree" to Sylva
+```
+
+Sylva's other two columns are useful here as well. `classification` from its
+ground filter (ASPRS codes, 2 = ground) is a class field Segfix can edit
+directly, so leaf/wood labels from `sylva.leaves` can be corrected in the
+same pass as the tree IDs (see [Point classes](#point-classes)), and
+`sylva.trees` stem positions and DBH make a stem map for
+[inventory matching](#field-inventory-stem-map-matching).
+
 ### arbor output
 
 [arbor](https://github.com/r-lidar/arbor)'s pipeline (`arbor segment …`) writes
