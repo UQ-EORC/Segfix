@@ -9,9 +9,10 @@ back to a corrected version of the input, retaining all fields.
 
 ## Walkthrough video
 
-A 13-minute captioned tour of every tool, fixing every tree in the example
-cloud from `scripts/make_sample.py`, including large coordinates and dense
-clouds. Click to watch:
+A 17-minute captioned tour of every tool, fixing every tree in the example
+plot from `scripts/make_sample.py`: large coordinates and dense clouds, the
+editing loop, leaf and wood classes, and matching a field stem map. Click to
+watch:
 
 [![Watch the segfix walkthrough](https://raw.githubusercontent.com/UQ-EORC/Segfix/main/docs/walkthrough-thumbnail.png)](https://github.com/UQ-EORC/Segfix/releases/download/v1.0.11/segfix_walkthrough.mp4)
 
