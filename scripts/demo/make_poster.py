@@ -72,8 +72,8 @@ def main(argv=None) -> int:
     p.drawText(QRectF(0, height - 95, width, 50), Qt.AlignmentFlag.AlignCenter,
                subtitle)
 
-    # Play button, over the point view rather than the panels.
-    cx, cy, r = width * 0.38, (height - 190) / 2 + 40, 95
+    # Play button in the middle of the frame.
+    cx, cy, r = width / 2, (height - 190) / 2, 95
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(QColor(0, 0, 0, 170))
     p.drawEllipse(QPointF(cx, cy), r, r)
