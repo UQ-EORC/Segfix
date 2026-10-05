@@ -62,17 +62,17 @@ Two ready-made builds on the
 [releases page](https://github.com/UQ-EORC/Segfix/releases), neither
 needing admin and neither needing Python:
 
-**The installer** — `segfix-<version>-setup.exe`. Installs per-user by
+**The installer**, `segfix-<version>-setup.exe`: installs per-user by
 default (all-users only if you have the rights), adds a Start Menu entry and
 an uninstaller. Being unsigned, Windows shows a SmartScreen warning the
 first time: **More info** → **Run anyway**.
 
-**The portable zip** — `segfix-<version>-portable.zip`. Unzip anywhere and
+**The portable zip**, `segfix-<version>-portable.zip`: unzip anywhere and
 run `segfix.exe` from the folder. Nothing is written outside it.
 
 Both bundle their own Python, Qt, numpy and scipy, including Qt's software
 OpenGL fallback for machines without a usable graphics driver. If a managed
-machine refuses to run either — some block unsigned executables outright —
+machine refuses to run either (some block unsigned executables outright),
 `pip install segfix` into an existing Python still works, as above.
 
 ## Run
@@ -81,10 +81,12 @@ machine refuses to run either — some block unsigned executables outright —
 segfix
 ```
 
-`segfix` will open a startup dialog. Double-click
-a recent project to reopen it, or click **New Project…** to import a point cloud
-file. Importing copies the file into a new project folder (created inside the
-directory you pick, named after the source file) and opens that copy, edits are
+`segfix` will open a startup dialog. Double-click a recent project to reopen
+it, or start a new one: **New Project…** imports a single point cloud, and
+**New from Per-tree Files…** imports a set of one-cloud-per-tree files, merged
+into one on the way in (see [Per-tree files](#per-tree-files-one-cloud-per-tree)).
+Either way the data is copied into a new project folder (created inside the
+directory you pick, named after the source) and that copy is opened, edits are
 always saved to the copy, never the original source file.
 
 Every project opened this way is recorded in `~/.config/segfix/registry.json`
@@ -140,9 +142,9 @@ this does not apply to its output.)
 
 ### Per-tree files (one cloud per tree)
 
-Plenty of pipelines emit **one file per tree** — raycloudtools' `raysplit`, and
-most per-tree extraction tools — usually with a ground/unassigned cloud beside
-them. **New from Per-tree Files…** on the startup dialog imports such a set
+Plenty of pipelines emit **one file per tree**, such as raycloudtools'
+`raysplit` and most per-tree extraction tools, usually with a ground or
+unassigned cloud beside them. **New from Per-tree Files…** on the startup dialog imports such a set
 directly:
 pick the files (or a whole folder), and Segfix merges them into one project
 cloud with each file's tree ID written per point, leaving the originals
@@ -151,8 +153,8 @@ untouched.
 Which file is which tree is decided before anything is merged, and the table
 shows the answer for every file as you change it:
 
-* **from the filename**, by a regular expression you can edit — the default
-  takes the last run of digits, so `plot12_tree_7.ply` is tree 7;
+* **from the filename**, by a regular expression you can edit, defaulting to
+  the last run of digits, so `plot12_tree_7.ply` is tree 7;
 * **from a mapping CSV** of `path,tree_id` rows, which wins over the filename
   wherever it has a row (matched on the full path or just the name);
 * **typed in** for a one-off file, in the Tree ID column;
@@ -162,7 +164,7 @@ shows the answer for every file as you change it:
 Import is refused until every file has an ID, and if two files claim the same
 tree. The merged copy keeps the fields every input has (LAS: the first file's
 point format, with offsets covering the whole set; PLY: the properties common
-to all of them), and any tree-ID column already in a file is ignored — the
+to all of them), and any tree-ID column already in a file is ignored: the
 filename is the authority, which is the point of importing this way. **Export
 Trees…** writes the set back out one file per tree, under those same IDs.
 
@@ -172,8 +174,8 @@ nothing to do with the numbering your segmentation used.
 
 ### Field inventory (stem map) matching
 
-**Inventory ▸ Load Stem Map…** reads a field stem map — a CSV of measured
-trees — draws each one over the cloud as a wireframe cylinder of its DBH and
+**Inventory ▸ Load Stem Map…** reads a field stem map (a CSV of
+measured trees), draws each one over the cloud as a wireframe cylinder of its DBH and
 height, and ranks the likely matches for the tree under review.
 
 Columns are detected by name (`tree id`/`stem`/`tag`, `x`/`easting`,
@@ -183,14 +185,14 @@ blank line or a totals row costs nothing.
 
 **Alignment.** A stem map is rarely in the cloud's coordinates: it may be in
 a local plot frame, or global but measured with a handheld GPS. Segfix fits
-the shift from the *pattern* of stems — every stem-to-tree offset votes, and
-the winning one is refined — which survives the trees that only one of the
+the shift from the *pattern* of stems (every stem-to-tree offset votes, and
+the winning one is refined), which survives the trees that only one of the
 two has, and a plot-local map against a UTM cloud is just a large shift. The
 dialog reports it in metres ("10 stems within reach · median 0.74 m"), and X
 and Y can be nudged by hand with the cylinders moving as you type.
 
 **Candidates.** For the tree under review, the **Inventory match** table
-ranks stems by position, height *and* DBH together, best first — position
+ranks stems by position, height *and* DBH together, best first. Position
 alone is ambiguous in a closed stand, where the nearest stem is routinely the
 wrong one. The tree's height comes from its points, and its DBH from a circle
 fitted to a slab at breast height; a fit that isn't round enough to trust
@@ -201,7 +203,7 @@ lights that cylinder up in the view, so a ranking can be checked against the
 trunk rather than taken on trust.
 
 To try it without field data, `scripts/make_test_set.py` writes a set of
-synthetic plots with matching inventory — an open plot, a closed canopy
+synthetic plots with matching inventory: an open plot, a closed canopy
 where the nearest stem is often the wrong one, a 15° slope, leaning stems,
 and a georeferenced plot that also triggers the large-coordinate and dense
 prompts. Each comes with the truth it was built from and two stem maps (one
@@ -212,8 +214,7 @@ python scripts/make_test_set.py ~/segfix_test_data --check
 ```
 
 For a cloud you already have, `scripts/make_stem_map.py` writes a synthetic
-stem map for it — with the errors that make matching
-real work: positions metres out, optionally in a local plot frame, heights a
+stem map for it, with the errors that make matching real work: positions metres out, optionally in a local plot frame, heights a
 few per cent off, trees the crew missed and stems the scan never saw.
 
 ```bash
@@ -223,12 +224,12 @@ python scripts/make_stem_map.py plot.las stems.csv --local --jitter 1.0
 Matching needs the cloud's coordinates near the origin: they are held as
 32-bit floats, so a raw UTM northing is kept only to about half a metre,
 which is coarser than the stem positions and the circle fit are built out
-of. Loading a stem map against an unshifted georeferenced cloud says so —
+of. Loading a stem map against an unshifted georeferenced cloud says so;
 reopen and accept the global shift.
 
 **Link** (or double-click a row) records the match: the cylinder turns green,
 the link is saved in the project's `.segfix.json` sidecar beside the Done
-list, and that stem drops out of every other tree's candidates — one stem,
+list, and that stem drops out of every other tree's candidates: one stem,
 one tree. **Inventory ▸ Export Matches…** writes the whole plot as
 `tree_id,stem_id,species,matched_by,distance_m,height_diff_m,dbh_diff_m,score,…`,
 with the trees you linked by hand marked `manual` and the rest filled in by a
@@ -262,7 +263,7 @@ On load Segfix measures the cloud's typical point spacing. If points are closer
 than **2 cm** it offers to downsample for the session, one point per voxel (3 cm
 by default, editable in the prompt), which is plenty to see and re-label a tree
 but a fraction of the points to draw and lasso. The prompt shows what the size
-you pick would actually keep — "keeps about 42% of the points (204,207,954)" —
+you pick would actually keep ("keeps about 42% of the points (204,207,954)"),
 measured from sample boxes of the cloud and updated as you change the size.
 Worth reading before accepting: how much a voxel thins a cloud depends on how
 its points are spread, not on the average spacing, and a cloud measuring 1.7 cm
@@ -290,7 +291,10 @@ where another tree's or the ground's point was the one kept.
 The menu bar carries the session-level actions: **File ▸ Open Project…**
 (`Ctrl+O`, reopens the startup dialog and switches project without a manual
 restart), **Save Project** (`Ctrl+S`) and **Export Trees…**; **Edit ▸ Undo / Redo** (`Ctrl+Z` /
-`Ctrl+Shift+Z`); **Preferences ▸ Theme ▸ Light / Dark**, applied immediately
+`Ctrl+Shift+Z`); **Inventory ▸ Load Stem Map… / Align to Cloud… / Export
+Matches… / Clear Stem Map** (see
+[Field inventory matching](#field-inventory-stem-map-matching));
+**Preferences ▸ Theme ▸ Light / Dark**, applied immediately
 and remembered (via `QSettings`) for next launch; and **Help ▸ About Segfix**
 for the version, links, and full GPL licence.
 
@@ -306,14 +310,14 @@ stays in view at the same zoom.
 
 Below the view buttons, **Inside** stands the camera *at* a point in the
 cloud and switches to a perspective projection, like CloudCompare's bubble
-view. An orthographic view of a dense plot is a wall — every stem at every
+view. An orthographic view of a dense plot is a wall: every stem at every
 distance is drawn the same size, so what is in front of what can't be read,
 and a crown ten metres behind the one you're editing looks like part of it.
 From inside, near points spread apart and far ones converge, so a gap you
 can see through is a gap. Double-click a point to choose where to stand (or
 to move while you're there), drag to look around, **FOV** sets how wide the
-lens is, and scrolling pulls back out. Framing a whole tree — stepping
-through the queue, or loading another tree — steps back outside on its own.
+lens is, and scrolling pulls back out. Framing a whole tree, by stepping
+through the queue or loading another tree, steps back outside on its own.
 
 The right-hand panel holds two tables. **All Trees** (top) lists every tree in the
 file, a Done column (`✓` when reviewed), tree ID and point count, with a
@@ -344,8 +348,8 @@ to the right edge of the 3D view, next to the points they act on.
    under review is always the implicit target. **B** inverts the selection
    when the points you don't want are the easier shape to draw around.
    Inverting only ever reaches points that are on screen, so a cross section,
-   a lasso section or a hidden tree still bounds it — and with nothing
-   selected, **B** selects everything currently shown.
+   a lasso section or a hidden tree still bounds it. With nothing selected,
+   **B** selects everything currently shown.
 
    | Key | Operation |
    |-----|-----------|
@@ -357,8 +361,8 @@ to the right edge of the 3D view, next to the points they act on.
    | `R` / `T` | Tighten / loosen the cluster gap one step |
    | `Esc` | Back to camera / navigation |
    | `A` | Add selection to the current tree (missing branches, unassigned canopy) |
-   | `B` | Invert the selection, within what's on screen — with nothing selected it takes everything shown |
-   | `1`…`5` | Move selection into a neighbouring tree — the 1st to 5th button under **Move selection into a tree**, nearest tree first, without switching tree first |
+   | `B` | Invert the selection, within what's on screen; with nothing selected it takes everything shown |
+   | `1`…`5` | Move selection into a neighbouring tree: the 1st to 5th button under **Move selection into a tree**, nearest tree first, without switching tree first |
    | `S` | Split selection off as a new tree (it joins the queue unreviewed) |
    | `D` | Unassign selection, or the whole current tree if nothing is selected |
    | `X` | Mark selection as noise, or the whole current tree if nothing is selected (dismiss a bush/wall in one key) |
@@ -377,8 +381,8 @@ to the right edge of the 3D view, next to the points they act on.
    Every key sits under the left hand, so the right one never leaves the
    mouse: the tools on `Q` `W` `E` with the cluster gap beside them on
    `R` `T`, the edits along the home row, and the queue on `Z` / `V` /
-   `Space`. The keys these replaced — `L`, `Ctrl+L`, `K`, `[`, `]`, `N`,
-   `U`, `H`, `Shift+L` and the arrow keys — still work.
+   `Space`. The keys these replaced (`L`, `Ctrl+L`, `K`, `[`, `]`, `N`,
+   `U`, `H`, `Shift+L` and the arrow keys) still work.
 
    **Cluster (`E`)** is the other way to select: click a point and it takes the
    patch of that point's tree that is physically connected to it. How wide a
@@ -399,8 +403,8 @@ to the right edge of the 3D view, next to the points they act on.
    To **merge** an over-segmented fragment back in, lasso the whole fragment
    and press `A`; there is no separate merge key.
 
-   To hand a patch to the tree *next door* — the commonest fix where two
-   crowns overlap — the **Move selection into a tree** box lists the current
+   Handing a patch to the tree *next door* is the commonest fix where two
+   crowns overlap. The **Move selection into a tree** box lists the current
    tree's neighbours as coloured buttons, closest first. The nearest five
    sit at the top and never scroll, each wearing the keycap that presses it
    (`1`…`5`); any further neighbours scroll in the box below, and are a
@@ -429,19 +433,19 @@ to the right edge of the 3D view, next to the points they act on.
 7. **File ▸ Export Trees…** writes every tree in the cloud to a folder you
    pick, one file per tree, named after the cloud (`plot_a.las` →
    `plot_a_tree_7.las`) and in its format. Each file carries all of that
-   tree's points at full resolution — whole trees even from a downsampled
-   session — with every column and the file's own coordinates, so an exported
+   tree's points at full resolution (whole trees even from a downsampled
+   session), with every column and the file's own coordinates, so an exported
    tree still lands in the right place in any other tool. Unassigned points
    and anything dismissed as noise aren't trees and aren't written. Trees are
    exported as the saved file has them, so Segfix offers to save first. If
-   any trees are marked Done it also asks which to write — all of them, or
-   only the Done ones — for when a plot is reviewed for the few trees you
+   any trees are marked Done it also asks which to write, all of them or
+   only the Done ones, for when a plot is reviewed for the few trees you
    actually need.
 
 ## Point classes
 
 Besides which tree each point belongs to, Segfix can edit what each point
-*is* — leaf, wood, understorey, ground, or any classes you use — held in one
+*is* (leaf, wood, understorey, ground, or any classes you use), held in one
 numeric per-point field of the cloud, such as a LAS `classification` or a
 PLY property like `semantic`.
 
@@ -458,14 +462,14 @@ Classes are edited inside the same tree-and-neighbours review. The
 `Ctrl+1`…`Ctrl+5`: lasso some points and press one to give them that class,
 or press one with nothing selected to give the whole current tree that class.
 **Colour by class** (`Shift+F`) colours the points by class instead of by
-tree — wood brown, leaves green and ground tan when the names say so — and
+tree (wood brown, leaves green and ground tan when the names say so), and
 a tree's fade still applies. **New class…** adds a class numbered one above
 the rest and gives it to the selection, if there is one. Class edits undo and
 redo along with the tree edits, in the order they were made.
 
 The box floats over the 3D view, under **Current tree**, which on a laptop
 screen is most of the view. **Point class in top bar** in the **View** group
-moves it into the top strip instead, beside Cross section and Lasso section —
+moves it into the top strip instead, beside Cross section and Lasso section:
 the same box with the same buttons, not a second copy. It floats by default,
 since a project with no class field never needs it.
 
@@ -529,7 +533,7 @@ Ecosystem Research Network (TERN).
 If Segfix contributed to your work, please cite it:
 
 > Devereux, T. and Rivory, J. (2026). *Segfix: a GUI tool to fix the instance
-> segmentation of tree point clouds* (version 1.0.11) [Computer software].
+> segmentation of tree point clouds* (version 1.0.12) [Computer software].
 > The University of Queensland. https://github.com/UQ-EORC/Segfix
 
 ```bibtex
@@ -538,7 +542,7 @@ If Segfix contributed to your work, please cite it:
   title        = {Segfix: a GUI tool to fix the instance segmentation of
                   tree point clouds},
   year         = {2026},
-  version      = {1.0.11},
+  version      = {1.0.12},
   organization = {The University of Queensland},
   url          = {https://github.com/UQ-EORC/Segfix}
 }
