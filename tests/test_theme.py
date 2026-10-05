@@ -77,3 +77,10 @@ def test_styled_buttons_follow_a_theme_switch_in_both_directions(monkeypatch):
             f"stylesheet button kept the previous theme after switching to {mode}"
         )
     host.close()
+
+
+def test_a_first_run_is_light():
+    """The remembered choice wins once there is one; this is what a machine
+    with no saved setting gets."""
+    assert theme.DEFAULT == "light"
+    assert theme.CANVAS_BG[theme.DEFAULT] == "#f2f2f2"

@@ -294,8 +294,8 @@ restart), **Save Project** (`Ctrl+S`) and **Export Trees…**; **Edit ▸ Undo /
 `Ctrl+Shift+Z`); **Inventory ▸ Load Stem Map… / Align to Cloud… / Export
 Matches… / Clear Stem Map** (see
 [Field inventory matching](#field-inventory-stem-map-matching));
-**Preferences ▸ Theme ▸ Light / Dark**, applied immediately
-and remembered (via `QSettings`) for next launch; and **Help ▸ About Segfix**
+**Preferences ▸ Theme ▸ Light / Dark** (light on a first run), applied
+immediately and remembered (via `QSettings`) for next launch; and **Help ▸ About Segfix**
 for the version, links, and full GPL licence.
 
 Navigation matches CloudCompare: clouds open **Z-up**, **left-drag rotates,

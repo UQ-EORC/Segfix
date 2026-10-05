@@ -96,7 +96,55 @@ _LEAKY = (11, (6.0, 14.0), 8.5, 2.2)
 # The ground patch tree 11 swallowed: beside its trunk, clear of it.
 _LEAK_PATCH = ((6.8, 8.6), (13.0, 15.4))  # (x range, y range)
 _BUSH = (12, (9.2, 12.4), 1.1, 0.9)       # id, xy, height, radius
-_BOUNDS = ((-4.0, 35.0), (-4.0, 18.0))
+_BOUNDS = ((-4.0, 35.0), (-4.0, 26.0))
+
+# The rest of the stand: trees with nothing wrong with them, filling the plot
+# so it reads as a piece of forest rather than a dozen specimens on a lawn.
+# They get IDs from 13 up, after the ones the errors above are pinned to.
+_STAND_COUNT = 22
+#: How much clear air a new tree's crown must leave around every tree already
+#: placed. Enough that it never joins one of their neighbour sets: the
+#: walkthrough loads tree 1 and talks about the two trees that touch it, and a
+#: third arriving unannounced would make a liar of it. New trees may still
+#: crowd each other, which is the point.
+_STAND_CLEARANCE = 1.6
+_FIRST_STAND_ID = 13
+
+
+def stand(existing, bounds, count=_STAND_COUNT, rng=None):
+    """Extra clean trees on a jittered grid, skipping anywhere too close to
+    a tree already placed.
+
+    ``existing`` is ``(xy, crown radius)`` per tree already in the plot.
+    Returns ``(id, xy, height, radius)`` rows like :data:`_CLEAN`.
+    """
+    rng = rng or np.random.default_rng()
+    (xlo, xhi), (ylo, yhi) = bounds
+    pinned = list(existing)
+    placed = []
+    step = 2.5
+    spots = [
+        (x + float(rng.normal(0, 0.7)), y + float(rng.normal(0, 0.7)))
+        for x in np.arange(xlo + 2.0, xhi - 1.0, step)
+        for y in np.arange(ylo + 2.0, yhi - 1.0, step)
+    ]
+    rng.shuffle(spots)
+    for x, y in spots:
+        if len(placed) == count:
+            break
+        height = float(rng.uniform(6.0, 15.0))
+        radius = float(height * rng.uniform(0.16, 0.26))
+        # Clear of the trees the walkthrough talks about, but free to crowd
+        # the rest of the stand: neighbouring crowns overlapping is what a
+        # plot looks like, and what the neighbour buttons are for.
+        if any(np.hypot(x - ox, y - oy) < radius + orad + _STAND_CLEARANCE
+               for (ox, oy), orad in pinned):
+            continue
+        if any(np.hypot(x - ox, y - oy) < max(radius, orad)
+               for (ox, oy), orad in ((xy, r) for _i, xy, _h, r in placed)):
+            continue  # stems too close to tell apart
+        placed.append((_FIRST_STAND_ID + len(placed), (x, y), height, radius))
+    return placed
 
 
 # -- volumetric (default) shapes ---------------------------------------------------
@@ -318,6 +366,15 @@ def main(out, spacing=None, origin=None):
 
     trunks = []  # every stem, for where the ground goes
 
+    # The error cases are placed first and the rest of the stand fills in
+    # around them, so their neighbours stay exactly as the walkthrough
+    # describes however many extra trees there are.
+    pinned = [(xy, r) for _t, xy, _h, r in _CLEAN]
+    pinned += [(_OVER_SEGMENTED[1], _OVER_SEGMENTED[3])]
+    pinned += [(xy, r) for xy, _h, r in _UNDER_SEGMENTED[1]]
+    pinned += [(_LEAKY[1], _LEAKY[3]), (_BUSH[1], _BUSH[3])]
+    extra = stand(pinned, _BOUNDS, rng=rng)
+
     taker, owner = _BOUNDARY
     taker_xy = next(xy for tid, xy, _h, _r in _CLEAN if tid == taker)
     for tid, xy, h, r in _CLEAN:
@@ -329,6 +386,10 @@ def main(out, spacing=None, origin=None):
             add(pts[taken], taker)
         else:
             add(pts, tid)
+        trunks.append(xy)
+
+    for tid, xy, h, r in extra:
+        add(make(xy, h, r), tid)
         trunks.append(xy)
 
     # Over-segmented: one physical tree split by height into two IDs.

@@ -34,7 +34,11 @@ from qtpy.QtCore import QSettings
 from qtpy.QtGui import QColor, QPalette
 
 _ORG, _APP = "segfix", "segfix"
-DEFAULT = "dark"
+#: What a first run looks like. Light: a point cloud is read against the
+#: background all day, and most of the people using this are in a lit office
+#: beside a window rather than a dark room. Either way it is one menu away,
+#: and the choice is remembered from then on (see load/save below).
+DEFAULT = "light"
 
 #: vispy background-colour string per mode (see CloudView.set_background)
 CANVAS_BG = {"dark": "#262626", "light": "#f2f2f2"}
