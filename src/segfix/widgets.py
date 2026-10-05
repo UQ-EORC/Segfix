@@ -764,15 +764,6 @@ class SegFixWidget(QWidget):
         )
         self.fade_others_cb.toggled.connect(self._set_fade_others)
         view_row.addWidget(self.fade_others_cb)
-        # The class box covers the canvas wherever it floats, and on a small
-        # screen it reaches the bottom of the view. Off by default: a project
-        # with no class field never needs it at all.
-        self.class_in_bar_cb = QCheckBox("Point class in top bar")
-        self.class_in_bar_cb.setToolTip(
-            "Move the Point class box out of the 3D view and into this bar"
-        )
-        self.class_in_bar_cb.toggled.connect(self._set_class_in_top_bar)
-        view_row.addWidget(self.class_in_bar_cb)
         view_row.addStretch(1)
         view.addLayout(view_row)
 
@@ -1102,8 +1093,18 @@ class SegFixWidget(QWidget):
     CLASS_ROWS_DOCKED = 2
     CLASS_BAR_W = 360
 
+    @property
+    def class_in_top_bar(self) -> bool:
+        return self._class_docked
+
     def _set_class_in_top_bar(self, docked: bool) -> None:
         """Move the Point class box between the canvas and the top bar.
+
+        Driven by Preferences ▸ Point Class Box ▸ In the top bar, not by a
+        tick in the View group: it is a choice about where the window puts
+        things rather than about what the view shows, and the bar is wide
+        enough as it is. On a 1920-wide screen one more checkbox there ran
+        the section boxes under the side panel.
 
         Reparented, not duplicated: one set of buttons, one colour-by-class
         state, so there is no second copy to keep in step. Floating it is

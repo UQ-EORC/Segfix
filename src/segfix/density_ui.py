@@ -51,6 +51,11 @@ class DownsampleDialog(QDialog):
                  kept_fraction=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Dense point cloud")
+        # What it was told, kept rather than only rendered into the text
+        # below: callers that drive this dialog (the walkthrough recorder,
+        # tests) otherwise have to parse a sentence to find out.
+        self.spacing = spacing
+        self.n_points = n_points
         layout = QVBoxLayout(self)
 
         top = QHBoxLayout()

@@ -17,8 +17,12 @@ mkdir -p "$WORK/out"
 exec > >(tee "$LOG") 2>&1
 cd "$D" || exit 1
 
-$PY -m py_compile recorder.py make_video.py storyboard.py || { echo "SYNTAX ERROR"; exit 1; }
-echo "syntax ok"
+$PY -m py_compile recorder.py make_video.py storyboard.py preflight.py \
+  || { echo "SYNTAX ERROR"; exit 1; }
+# Check the storyboard against the app before tying up the screen for a
+# quarter of an hour: a renamed button or a panel attribute that moved
+# otherwise surfaces minutes in, with the recording wasted.
+$PY preflight.py || { echo "PREFLIGHT FAILED"; exit 1; }
 rm -rf "$WORK/projects" "$WORK/config" && mkdir -p "$WORK/projects" "$WORK/config"
 if [ ! -s "$WORK/example_utm.las" ]; then
   $PY "$REPO/scripts/make_sample.py" --spacing 0.015 \

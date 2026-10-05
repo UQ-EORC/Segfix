@@ -22,7 +22,7 @@ import types
 
 import numpy as np
 from qtpy.QtCore import QPoint, QPointF, Qt, QTimer
-from qtpy.QtWidgets import QMessageBox, QPushButton, QToolButton
+from qtpy.QtWidgets import QAbstractButton, QMessageBox, QToolButton
 
 from make_video import handles, main_ready, table_row_for
 from recorder import find, outline_around
@@ -63,7 +63,10 @@ def key_then(r, key, action, lead=0.5):
 
 # -- scene helpers -----------------------------------------------------------
 def button(parent, text, prefix=False, contains=False):
-    for b in parent.findChildren(QPushButton):
+    """Any clickable thing with this label: the View group's toggles are
+    checkboxes, the view buttons are tool buttons, the rest are push
+    buttons, and the storyboard only ever wants to click them."""
+    for b in parent.findChildren(QAbstractButton):
         t = b.text().replace("&", "").strip()
         if t == text or (prefix and t.startswith(text)) or (contains and text in t):
             return b

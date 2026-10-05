@@ -516,6 +516,12 @@ def _build_menus(win, panel, catalog=None, scene=None) -> None:
     )
 
     pref_menu = bar.addMenu("&Preferences")
+    class_place = pref_menu.addAction("Point class box in the top bar")
+    class_place.setCheckable(True)
+    class_place.setToolTip(
+        "Move the Point class box out of the 3D view and into the top bar"
+    )
+    class_place.toggled.connect(panel._set_class_in_top_bar)
     theme_menu = pref_menu.addMenu("Theme")
     theme_group = QActionGroup(win)
     theme_group.setExclusive(True)
