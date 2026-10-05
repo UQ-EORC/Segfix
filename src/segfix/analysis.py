@@ -250,3 +250,88 @@ def neighbour_distances(
         if np.isfinite(d).any():
             out[int(t)] = float(np.min(d[np.isfinite(d)]))
     return out
+
+
+# -- stem measurements -------------------------------------------------------
+#: Where a diameter is measured, and how thick a slab is taken around it:
+#: breast height, 1.3 m, with ±15 cm of stem either side of it. Thicker
+#: averages a taper and a lean into the circle; thinner is too few points to
+#: fit on a cloud sampled every couple of centimetres.
+BREAST_HEIGHT = 1.3
+_SLAB = 0.15
+
+#: A fit outside these is not a tree stem — a branch, a patch of ground, or
+#: a circle through noise. Diameters in metres.
+_MIN_DBH, _MAX_DBH = 0.02, 3.0
+
+#: Relative residual at or below which the diameter is worth believing.
+#: Measured on synthetic stems: a clean trunk fits at 0.03, one with 2 cm of
+#: scanner noise at 0.12, a leaning one at 0.11, and half a trunk at 0.06 —
+#: while a third of an arc, which returns a third of the true diameter, sits
+#: at 0.27. Callers that *score* on DBH should ignore anything above this
+#: (see segfix.inventory); callers that only display it needn't.
+GOOD_FIT = 0.2
+
+#: Past this the points were not a circle at all, and no number comes back.
+_MAX_RESIDUAL = 0.45
+
+
+def stem_diameter(
+    coords: np.ndarray,
+    base_z: float | None = None,
+    height: float = BREAST_HEIGHT,
+    slab: float = _SLAB,
+) -> tuple[float, float] | None:
+    """Estimate a stem's diameter at breast height from its points.
+
+    Returns ``(diameter, residual)`` in metres, where ``residual`` is the
+    RMS distance of the slab's points from the fitted circle divided by its
+    radius — a unitless "how round was it really", which is what tells a
+    clean stem (a few per cent) from a circle fitted through a fork, a lean,
+    or one side of a trunk the scanner only saw from one angle. None when
+    there is nothing fittable: too few points, or a diameter outside
+    :data:`_MIN_DBH`..:data:`_MAX_DBH`.
+
+    The fit is Kåsa's: the algebraic least-squares circle, which is one
+    linear solve rather than an iteration, and is biased only when the
+    points cover a short arc — exactly the case the residual then reports.
+    """
+    coords = np.asarray(coords, dtype=np.float64)
+    if coords.shape[0] < 8:
+        return None
+    if base_z is None:
+        # The stem's own foot: the 1st percentile rather than the minimum, so
+        # one stray point under the tree doesn't drop breast height into the
+        # ground.
+        base_z = float(np.percentile(coords[:, 2], 1.0))
+    z = coords[:, 2]
+    in_slab = (z >= base_z + height - slab) & (z <= base_z + height + slab)
+    points = coords[in_slab][:, :2]
+    if points.shape[0] < 8:
+        return None
+
+    centre, radius = _fit_circle(points)
+    if radius is None:
+        return None
+    diameter = 2.0 * radius
+    if not (_MIN_DBH <= diameter <= _MAX_DBH):
+        return None
+    residual = np.hypot(*(points - centre).T) - radius
+    quality = float(np.sqrt(np.mean(residual ** 2)) / radius)
+    return (diameter, quality) if quality <= _MAX_RESIDUAL else None
+
+
+def _fit_circle(points: np.ndarray):
+    """Kåsa circle fit: ``(centre, radius)``, or ``(None, None)``."""
+    centred = points - points.mean(axis=0)  # conditioning, not a shortcut
+    x, y = centred[:, 0], centred[:, 1]
+    design = np.column_stack([x, y, np.ones(len(x))])
+    try:
+        solution, *_ = np.linalg.lstsq(design, x ** 2 + y ** 2, rcond=None)
+    except np.linalg.LinAlgError:  # pragma: no cover - degenerate input
+        return None, None
+    cx, cy = solution[0] / 2.0, solution[1] / 2.0
+    squared = solution[2] + cx ** 2 + cy ** 2
+    if not np.isfinite(squared) or squared <= 0:
+        return None, None
+    return np.array([cx, cy]) + points.mean(axis=0), float(np.sqrt(squared))

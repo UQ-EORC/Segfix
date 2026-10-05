@@ -60,6 +60,8 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from . import analysis
+from . import inventory
 from . import operations as ops
 from . import theme
 from .cloudview import INSIDE_FOV
@@ -74,6 +76,14 @@ from .viewer import (
     visibility_mask,
 )
 
+
+#: Inventory stems, drawn as wireframe cylinders over the cloud: amber for
+#: the stem map as loaded, brighter for the candidate under the cursor, green
+#: for the one this tree is matched to. RGBA, slightly translucent so a
+#: cylinder never hides the trunk it is being compared with.
+STEM_COLOR = (0.88, 0.70, 0.25, 0.55)
+ACTIVE_STEM_COLOR = (1.0, 0.95, 0.5, 0.95)
+LINKED_STEM_COLOR = (0.45, 0.85, 0.5, 0.9)
 
 #: Settings for the cluster tool's gap: how many point spacings of empty space
 #: one click will bridge. Discrete steps rather than a free value because the
@@ -613,6 +623,7 @@ class SegFixWidget(QWidget):
         tlay.addLayout(nav_row)
 
         layout.addWidget(self.trees_box)
+        self._build_inventory_box(layout)
 
         # Interaction / View / the two section tools live in a separate
         # horizontal bar (docked at the top of the window by app.py, not
@@ -1327,6 +1338,230 @@ class SegFixWidget(QWidget):
         popover.move(anchor.mapToGlobal(anchor.rect().bottomLeft()))
         popover.show()
 
+    # -- inventory (field stem map) --------------------------------------
+    #: Columns of the candidates table.
+    STEM_COL, DIST_COL, DH_COL, DDBH_COL, SCORE_COL = range(5)
+
+    def _build_inventory_box(self, layout) -> None:
+        """The candidates table: which measured stem this tree might be.
+
+        Hidden until a stem map is loaded, so a project that never touches
+        field data looks exactly as it did.
+        """
+        self.inventory_box = QGroupBox("Inventory match")
+        box = QVBoxLayout(self.inventory_box)
+        box.setSpacing(3)
+        self.inventory_label = QLabel("No stem map loaded")
+        self.inventory_label.setWordWrap(True)
+        box.addWidget(self.inventory_label)
+
+        self.inventory_table = QTableWidget(0, 5)
+        self.inventory_table.setHorizontalHeaderLabels(
+            ["Stem", "Dist", "ΔH", "ΔDBH", "Score"]
+        )
+        self.inventory_table.verticalHeader().setVisible(False)
+        self.inventory_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.inventory_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.inventory_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.inventory_table.setMaximumHeight(150)
+        header = self.inventory_table.horizontalHeader()
+        header.setSectionResizeMode(self.STEM_COL, QHeaderView.Stretch)
+        # The numbers are what the ranking is read off; at a default column
+        # width the Score scrolled off the right-hand edge of the panel.
+        for column in (self.DIST_COL, self.DH_COL, self.DDBH_COL,
+                       self.SCORE_COL):
+            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        # Selecting a row lights that stem up in the 3D view, so the ranking
+        # can be checked against the trunk rather than taken on trust.
+        self.inventory_table.itemSelectionChanged.connect(self._on_candidate_row)
+        self.inventory_table.cellDoubleClicked.connect(
+            lambda *_: self.on_link_stem()
+        )
+        box.addWidget(self.inventory_table)
+
+        row = QHBoxLayout()
+        self.link_btn = QPushButton("Link")
+        self.link_btn.setToolTip(
+            "Record the selected stem as this tree's match (double-click a "
+            "row does the same)"
+        )
+        self.link_btn.clicked.connect(self.on_link_stem)
+        row.addWidget(self.link_btn)
+        self.unlink_btn = QPushButton("Unlink")
+        self.unlink_btn.clicked.connect(self.on_unlink_stem)
+        row.addWidget(self.unlink_btn)
+        row.addStretch(1)
+        box.addLayout(row)
+
+        self.inventory_box.hide()
+        layout.addWidget(self.inventory_box)
+
+        #: Loaded stem map and how it sits on the cloud.
+        self.stems: list = []
+        self.alignment = inventory.Alignment()
+        #: tree id -> stem id, saved in the project sidecar.
+        self.stem_links: dict[int, str] = {}
+        #: Where the loaded stem map came from, for the export's default name.
+        self.stem_map_path: str | None = None
+        self._candidates: list = []
+        self._stem_geometry = None
+
+    def set_stem_map(self, stems, alignment=None) -> None:
+        """Show a loaded stem map: draw it, and rank it for the current tree."""
+        self.stems = list(stems)
+        if alignment is not None:
+            self.alignment = alignment
+        self.inventory_box.setVisible(bool(self.stems))
+        self._stem_geometry = None
+        self._draw_stems()
+        self._refresh_candidates()
+
+    def set_alignment(self, alignment) -> None:
+        self.alignment = alignment
+        self._stem_geometry = None
+        self._draw_stems()
+        self._refresh_candidates()
+
+    def _ground_z(self) -> float:
+        """Where to stand the drawn stems: the loaded cloud's floor.
+
+        A stem map carries no z at all, and a cylinder drawn from z=0 in a
+        cloud whose ground is at 120 m is somewhere underground. The 1st
+        percentile rather than the minimum, for the same reason the DBH fit
+        uses it: one stray point below the plot shouldn't drop every stem.
+        """
+        coords = self.c.view.coords
+        if not len(coords):
+            return 0.0
+        return float(np.percentile(coords[:, 2], 1.0))
+
+    def _draw_stems(self) -> None:
+        if not self.stems:
+            self.c.view.clear_stems()
+            return
+        if self._stem_geometry is None:
+            self._stem_geometry = inventory.stem_geometry(
+                self.stems, self.alignment, base_z=self._ground_z()
+            )
+        segments, owner = self._stem_geometry
+        colors = np.tile(np.array(STEM_COLOR, np.float32), (len(segments), 1))
+        linked = self.stem_links.get(self.current)
+        highlight = self._highlight_stem
+        for stem_id, color in ((linked, LINKED_STEM_COLOR),
+                               (highlight, ACTIVE_STEM_COLOR)):
+            if stem_id is None:
+                continue
+            index = next(
+                (i for i, s in enumerate(self.stems) if s.stem_id == stem_id),
+                None,
+            )
+            if index is not None:
+                colors[owner == index] = color
+        self._stem_colors = colors  # what was drawn, for tests and redraws
+        self.c.view.set_stems(segments, colors)
+
+    _highlight_stem = None
+
+    def tree_stats(self, tree_id: int | None = None):
+        """Position, height and fitted DBH for a loaded tree."""
+        tree_id = self.current if tree_id is None else tree_id
+        if tree_id is None or not len(self.c.view.coords):
+            return None
+        return inventory.stats_from_points(
+            self.c.view.coords, self.c.cloud.labels, tree_id
+        )
+
+    def _refresh_candidates(self) -> None:
+        """Re-rank the stem map against the tree under review."""
+        if not self.stems:
+            return
+        stats = self.tree_stats()
+        self._candidates = []
+        if stats is not None:
+            self._candidates = inventory.candidates(
+                stats, self.stems, self.alignment,
+                exclude={
+                    stem_id for tree, stem_id in self.stem_links.items()
+                    if tree != self.current
+                },
+            )
+        self._fill_candidate_table(stats)
+
+    def _fill_candidate_table(self, stats) -> None:
+        table = self.inventory_table
+        table.setRowCount(len(self._candidates))
+        linked = self.stem_links.get(self.current)
+        for row, candidate in enumerate(self._candidates):
+            cells = [
+                candidate.stem.label,
+                f"{candidate.distance:.1f} m",
+                "-" if candidate.height_diff is None else f"{candidate.height_diff:+.1f}",
+                "-" if candidate.dbh_diff is None else f"{candidate.dbh_diff * 100:+.0f} cm",
+                f"{candidate.score:.2f}",
+            ]
+            for column, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if candidate.stem.stem_id == linked:
+                    item.setBackground(QColor(60, 110, 70))
+                table.setItem(row, column, item)
+            table.item(row, self.STEM_COL).setToolTip(
+                "Scored on " + ", ".join(candidate.used)
+            )
+        self.inventory_label.setText(self._inventory_summary(stats, linked))
+        self.unlink_btn.setEnabled(linked is not None)
+        self.link_btn.setEnabled(bool(self._candidates))
+
+    def _inventory_summary(self, stats, linked) -> str:
+        if self.current is None:
+            return f"{len(self.stems)} stems loaded - pick a tree to match"
+        if stats is None:
+            return "Load the tree's points to match it"
+        measured = f"{stats.height:.1f} m"
+        if stats.dbh is not None:
+            flag = "" if (stats.dbh_quality or 0) <= analysis.GOOD_FIT else " (poor fit)"
+            measured += f", DBH {stats.dbh * 100:.0f} cm{flag}"
+        matched = f" - matched to {linked}" if linked else ""
+        return f"Tree {self.current}: {measured}{matched}"
+
+    def _on_candidate_row(self) -> None:
+        rows = {i.row() for i in self.inventory_table.selectedIndexes()}
+        if not rows:
+            return
+        candidate = self._candidates[min(rows)]
+        self._highlight_stem = candidate.stem.stem_id
+        self._draw_stems()
+
+    def on_link_stem(self) -> None:
+        """Record the selected candidate as this tree's inventory match."""
+        if self.current is None or not self._candidates:
+            return
+        rows = {i.row() for i in self.inventory_table.selectedIndexes()}
+        candidate = self._candidates[min(rows) if rows else 0]
+        # One stem belongs to one tree: linking it here takes it off whatever
+        # it was linked to, rather than leaving the plot double-counted.
+        for tree_id, stem_id in list(self.stem_links.items()):
+            if stem_id == candidate.stem.stem_id:
+                del self.stem_links[tree_id]
+        self.stem_links[self.current] = candidate.stem.stem_id
+        self._save_progress()
+        self._refresh_candidates()
+        # The link is the state now, so the stem goes green rather than
+        # staying lit as "the row I am looking at".
+        self._highlight_stem = None
+        self._draw_stems()
+        self.c.view.status = (
+            f"Tree {self.current} matched to stem {candidate.stem.stem_id} "
+            f"({candidate.distance:.1f} m away, score {candidate.score:.2f})"
+        )
+
+    def on_unlink_stem(self) -> None:
+        if self.stem_links.pop(self.current, None) is None:
+            return
+        self._save_progress()
+        self._refresh_candidates()
+        self._draw_stems()
+        self.c.view.status = f"Tree {self.current} unmatched"
+
     def _build_cluster_gap_popover(self) -> None:
         """The Cluster gap popover: a Tight-to-Loose slider over
         :data:`CLUSTER_GAP_FACTORS`, and a line saying what the setting
@@ -1806,6 +2041,10 @@ class SegFixWidget(QWidget):
         # "others" means others than this one, so the two toggles answer to
         # a different set now.
         self._sync_view_toggles()
+        if changed and self.stems:
+            self._highlight_stem = None
+            self._refresh_candidates()
+            self._draw_stems()
         if changed and fly and tid is not None:
             self._fly_to(tid)
             self.c.view.status = (
@@ -2196,6 +2435,10 @@ class SegFixWidget(QWidget):
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             self.done_ids = {int(t) for t in data.get("done", [])}
+            self.stem_links = {
+                int(tree): str(stem)
+                for tree, stem in dict(data.get("inventory", {})).items()
+            }
         except (OSError, ValueError) as exc:
             self.c.view.status = f"Could not read progress file: {exc}"
 
@@ -2205,9 +2448,20 @@ class SegFixWidget(QWidget):
         if not path:
             return None
         try:
+            # Merged, not overwritten: the sidecar also carries the inventory
+            # links, and a later key written by another part of segfix should
+            # survive a plain Done click.
+            saved = {}
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    saved = json.load(f)
+            saved["done"] = sorted(self.done_ids)
+            saved["inventory"] = {
+                str(tree): stem for tree, stem in sorted(self.stem_links.items())
+            }
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({"done": sorted(self.done_ids)}, f)
-        except OSError as exc:
+                json.dump(saved, f)
+        except (OSError, ValueError) as exc:  # unreadable, or corrupt JSON
             self.c.view.status = f"Could not save progress: {exc}"
             return None
         return path

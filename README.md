@@ -170,6 +170,70 @@ This is worth preferring to merging the files yourself: a merged cloud with no
 tree-ID field falls back to numbering trees by their RGB colour, which has
 nothing to do with the numbering your segmentation used.
 
+### Field inventory (stem map) matching
+
+**Inventory ▸ Load Stem Map…** reads a field stem map — a CSV of measured
+trees — draws each one over the cloud as a wireframe cylinder of its DBH and
+height, and ranks the likely matches for the tree under review.
+
+Columns are detected by name (`tree id`/`stem`/`tag`, `x`/`easting`,
+`y`/`northing`, `dbh`/`diameter`, `height`, `species`); DBH in centimetres is
+recognised and converted. Rows without usable coordinates are skipped, so a
+blank line or a totals row costs nothing.
+
+**Alignment.** A stem map is rarely in the cloud's coordinates: it may be in
+a local plot frame, or global but measured with a handheld GPS. Segfix fits
+the shift from the *pattern* of stems — every stem-to-tree offset votes, and
+the winning one is refined — which survives the trees that only one of the
+two has, and a plot-local map against a UTM cloud is just a large shift. The
+dialog reports it in metres ("10 stems within reach · median 0.74 m"), and X
+and Y can be nudged by hand with the cylinders moving as you type.
+
+**Candidates.** For the tree under review, the **Inventory match** table
+ranks stems by position, height *and* DBH together, best first — position
+alone is ambiguous in a closed stand, where the nearest stem is routinely the
+wrong one. The tree's height comes from its points, and its DBH from a circle
+fitted to a slab at breast height; a fit that isn't round enough to trust
+(one side of a trunk, a fork) is shown with "poor fit" and left out of the
+scoring rather than allowed to rank the wrong stem first. The score is 0 for
+a perfect match, and roughly 1 at the edge of tolerance. Selecting a row
+lights that cylinder up in the view, so a ranking can be checked against the
+trunk rather than taken on trust.
+
+To try it without field data, `scripts/make_test_set.py` writes a set of
+synthetic plots with matching inventory — an open plot, a closed canopy
+where the nearest stem is often the wrong one, a 15° slope, leaning stems,
+and a georeferenced plot that also triggers the large-coordinate and dense
+prompts. Each comes with the truth it was built from and two stem maps (one
+plot-local), and `--check` scores the matching against that truth:
+
+```bash
+python scripts/make_test_set.py ~/segfix_test_data --check
+```
+
+For a cloud you already have, `scripts/make_stem_map.py` writes a synthetic
+stem map for it — with the errors that make matching
+real work: positions metres out, optionally in a local plot frame, heights a
+few per cent off, trees the crew missed and stems the scan never saw.
+
+```bash
+python scripts/make_stem_map.py plot.las stems.csv --local --jitter 1.0
+```
+
+Matching needs the cloud's coordinates near the origin: they are held as
+32-bit floats, so a raw UTM northing is kept only to about half a metre,
+which is coarser than the stem positions and the circle fit are built out
+of. Loading a stem map against an unshifted georeferenced cloud says so —
+reopen and accept the global shift.
+
+**Link** (or double-click a row) records the match: the cylinder turns green,
+the link is saved in the project's `.segfix.json` sidecar beside the Done
+list, and that stem drops out of every other tree's candidates — one stem,
+one tree. **Inventory ▸ Export Matches…** writes the whole plot as
+`tree_id,stem_id,species,matched_by,distance_m,height_diff_m,dbh_diff_m,score,…`,
+with the trees you linked by hand marked `manual` and the rest filled in by a
+greedy one-to-one matching marked `auto`.
+
 ### Large coordinates
 
 Georeferenced clouds (UTM, State Plane, …) have coordinates in the millions,
@@ -440,6 +504,8 @@ point of the same tree *and* class.
 | `startup_ui.py` | startup dialog: pick a recent entry or start a new project |
 | `merge.py` | per-tree file sets: filename/CSV → tree ID, and the streamed merge into one project cloud |
 | `multi_import_ui.py` | the per-tree import dialog: which file is which tree |
+| `inventory.py` | field stem maps: CSV → stems, the coordinate fit, candidate ranking, match CSV |
+| `inventory_ui.py` | stem-map loading and the alignment dialog |
 | `classes_ui.py` | Edit ▸ Point Classes…: pick the class field and name its values |
 | `update.py` | update check: a newer PyPI release for an installed copy, new commits for a git checkout |
 | `app.py` | `segfix` CLI entry point |

@@ -179,6 +179,17 @@ class CloudView:
             parent=self.view.scene, connect="segments", width=2, antialias=True
         )
         self.bbox.set_gl_state(depth_test=False, blend=True)
+        # Inventory stems: wireframe cylinders at the field-measured DBH and
+        # height (see segfix.inventory.stem_geometry). Depth-tested, unlike
+        # the box above: the whole point is to see whether a drawn stem sits
+        # on the trunk or in front of it, which an always-on-top line can't
+        # show.
+        self.stems = scene.visuals.Line(
+            parent=self.view.scene, connect="segments", width=1.5,
+            antialias=True,
+        )
+        self.stems.set_gl_state("translucent", depth_test=True, blend=True)
+        self.stems.visible = False
 
         self._coords = np.empty((0, 3), np.float32)
         self._face_color = np.empty((0, 4), np.float32)
@@ -371,6 +382,24 @@ class CloudView:
 
     def clear_bbox(self) -> None:
         self.bbox.visible = False
+        self.canvas.update()
+
+    # -- inventory stems -------------------------------------------------
+    def set_stems(self, segments: np.ndarray, colors: np.ndarray) -> None:
+        """Draw the stem map's cylinders (``(2E, 3)`` endpoints, ``(2E, 4)``
+        colours), or clear them when given nothing."""
+        if segments is None or len(segments) == 0:
+            self.clear_stems()
+            return
+        self.stems.set_data(
+            pos=np.asarray(segments, np.float32),
+            color=np.asarray(colors, np.float32),
+        )
+        self.stems.visible = True
+        self.canvas.update()
+
+    def clear_stems(self) -> None:
+        self.stems.visible = False
         self.canvas.update()
 
     # -- appearance ---------------------------------------------------
