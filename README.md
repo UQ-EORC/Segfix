@@ -14,7 +14,7 @@ plot from `scripts/make_sample.py`: large coordinates and dense clouds, the
 editing loop, leaf and wood classes, and matching a field stem map. Click to
 watch:
 
-[![Watch the segfix walkthrough](https://raw.githubusercontent.com/UQ-EORC/Segfix/main/docs/walkthrough-thumbnail.png)](https://github.com/UQ-EORC/Segfix/releases/download/v1.1.0/segfix_walkthrough.mp4)
+[![Watch the segfix walkthrough](https://raw.githubusercontent.com/UQ-EORC/Segfix/main/docs/walkthrough-thumbnail.png)](https://github.com/UQ-EORC/Segfix/releases/download/v1.2.0/segfix_walkthrough.mp4)
 
 Testing is done on Fedora Linux 44, Windows 11 and macOS.
 
@@ -586,7 +586,7 @@ Ecosystem Research Network (TERN).
 If Segfix contributed to your work, please cite it:
 
 > Devereux, T. and Rivory, J. (2026). *Segfix: a GUI tool to fix the instance
-> segmentation of tree point clouds* (version 1.1.0) [Computer software].
+> segmentation of tree point clouds* (version 1.2.0) [Computer software].
 > The University of Queensland. https://github.com/UQ-EORC/Segfix
 
 ```bibtex
@@ -595,7 +595,7 @@ If Segfix contributed to your work, please cite it:
   title        = {Segfix: a GUI tool to fix the instance segmentation of
                   tree point clouds},
   year         = {2026},
-  version      = {1.1.0},
+  version      = {1.2.0},
   organization = {The University of Queensland},
   url          = {https://github.com/UQ-EORC/Segfix}
 }
