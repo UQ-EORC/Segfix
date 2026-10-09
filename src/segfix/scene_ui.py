@@ -31,12 +31,17 @@ import os
 
 import numpy as np
 from qtpy.QtCore import Qt
-from qtpy.QtGui import QBrush
+from qtpy.QtGui import QBrush, QColor, QPixmap
 from qtpy.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QGroupBox,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
+    QMenu,
+    QProgressBar,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -45,9 +50,33 @@ from qtpy.QtWidgets import (
 
 from . import theme
 from .treecatalog import Catalog
-from .viewer import busy
+from .viewer import busy, colors_for_labels
 
 DEFAULT_REACH = 1.0  # metres; matches SegFixWidget's own "reach" spinner default
+
+
+def update_done(cloud_path: str, tree_id: int, done: bool) -> str | None:
+    """Mark one tree done (or not) in the sidecar, keeping whatever else it
+    holds. Returns the sidecar path, or ``None`` if it couldn't be written.
+
+    For the All Trees table's context menu, where the tree need not be the
+    one loaded: the editing panel owns the list once a tree is loaded, and
+    writes it the same way (see ``SegFixWidget._save_progress``).
+    """
+    path = f"{cloud_path}.segfix.json"
+    saved = {}
+    try:
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                saved = json.load(f)
+        done_ids = {int(t) for t in saved.get("done", [])}
+        (done_ids.add if done else done_ids.discard)(int(tree_id))
+        saved["done"] = sorted(done_ids)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(saved, f)
+    except (OSError, ValueError):
+        return None
+    return path
 
 
 def read_done(cloud_path: str) -> set[int]:
@@ -167,6 +196,35 @@ class SceneWidget(QWidget):
         self.path_label = QLabel()
         self.path_label.setWordWrap(True)
         blay.addWidget(self.path_label)
+        # The done count as a bar, as every labelling tool shows a job's
+        # progress: a plot is a few hundred trees, and "38%" reads slower
+        # than a bar a third full.
+        self.progress = QProgressBar()
+        self.progress.setObjectName("doneProgress")
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(8)
+        blay.addWidget(self.progress)
+
+        # Find a tree by number, or show just what is left to do. A row per
+        # tree is the right table for a plot of twenty; for one of four
+        # hundred it is a scroll, and the one to fix next is the one the
+        # field sheet names.
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(6)
+        self.filter_edit = QLineEdit()
+        self.filter_edit.setObjectName("treeFilter")
+        self.filter_edit.setPlaceholderText("Find tree ID…")
+        self.filter_edit.setClearButtonEnabled(True)
+        self.filter_edit.setToolTip(
+            "Show only the trees whose ID starts with this"
+        )
+        self.filter_edit.textChanged.connect(lambda _t: self._apply_filter())
+        filter_row.addWidget(self.filter_edit, stretch=1)
+        self.pending_only = QCheckBox("To do only")
+        self.pending_only.setToolTip("Hide the trees already marked done")
+        self.pending_only.toggled.connect(lambda _c: self._apply_filter())
+        filter_row.addWidget(self.pending_only)
+        blay.addLayout(filter_row)
 
         self.table = QTableWidget(0, len(self.COLUMNS))
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
@@ -185,7 +243,18 @@ class SceneWidget(QWidget):
         header.setSectionResizeMode(1, QHeaderView.Stretch)           # Tree ID
         self.table.setMinimumHeight(150)  # fill the dock's vertical space
         self.table.cellDoubleClicked.connect(lambda *_: self.on_load_tree())
+        # Enter on a row loads it too, so a tree typed into the filter is
+        # Enter, Enter away.
+        self.table.itemActivated.connect(lambda *_: self.on_load_tree())
+        self.filter_edit.returnPressed.connect(self._focus_first_row)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
         blay.addWidget(self.table)
+        #: fn(tree_id, done) -> path | None: set by the app to mark a tree
+        #: done through the editing panel, which owns the done list once a
+        #: tree is loaded. ``None`` back means it had nowhere to save, and
+        #: the sidecar is written here instead.
+        self.on_mark_done = None
 
         layout.addWidget(self.trees_box)
 
@@ -221,9 +290,17 @@ class SceneWidget(QWidget):
                 f"points, one per {catalog.voxel_size:g} m voxel. Saving "
                 "interpolates your edits back onto every original point."
             )
+        self.progress.setRange(0, max(total, 1))
+        self.progress.setValue(n_done)
+        self.progress.setToolTip(f"{n_done} of {total} trees marked done")
         self.table.setSortingEnabled(False)
         self.table.setRowCount(total)
         done_brush = QBrush(theme.done_row_bg())
+        # The same swatch the view and the queue below give each tree, so a
+        # colour seen in the canopy can be found in the list.
+        labels = np.array([rec.label for rec in records], dtype=np.int64)
+        rgba = (colors_for_labels(labels, catalog.label_colors)
+                if total else np.empty((0, 4)))
         for row, rec in enumerate(records):
             is_done = rec.label in done
             mark = "✓" if is_done else ""
@@ -233,8 +310,79 @@ class SceneWidget(QWidget):
                 item.setData(Qt.UserRole, rec.label)
                 if is_done:
                     item.setBackground(done_brush)
+                if col == 1:
+                    r, g, b = (int(v * 255) for v in rgba[row][:3])
+                    swatch = QPixmap(12, 12)
+                    swatch.fill(QColor(r, g, b))
+                    item.setData(Qt.DecorationRole, swatch)
                 self.table.setItem(row, col, item)
         self.table.setSortingEnabled(True)  # re-sorts by the header indicator
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        """Hide the rows the filter box and "To do only" rule out."""
+        prefix = self.filter_edit.text().strip()
+        pending = self.pending_only.isChecked()
+        shown = 0
+        for row in range(self.table.rowCount()):
+            id_item = self.table.item(row, 1)
+            done_item = self.table.item(row, 0)
+            if id_item is None or done_item is None:
+                continue
+            keep = str(id_item.data(Qt.DisplayRole)).startswith(prefix)
+            if pending and done_item.data(Qt.DisplayRole):
+                keep = False
+            self.table.setRowHidden(row, not keep)
+            shown += keep
+        self.trees_box.setTitle(
+            "All Trees" if shown == self.table.rowCount()
+            else f"All Trees ({shown} of {self.table.rowCount()} shown)"
+        )
+
+    def visible_labels(self) -> list[int]:
+        """The tree IDs the table shows, after the filter, top to bottom."""
+        return [
+            self.table.item(row, 0).data(Qt.UserRole)
+            for row in range(self.table.rowCount())
+            if not self.table.isRowHidden(row)
+        ]
+
+    def _focus_first_row(self) -> None:
+        """Enter in the filter box: select the first match, so a second
+        Enter loads it."""
+        for row in range(self.table.rowCount()):
+            if not self.table.isRowHidden(row):
+                self.table.selectRow(row)
+                self.table.setFocus()
+                return
+
+    def _context_menu(self, pos) -> None:
+        """Right-click a row: what double-click and the queue's Done box do,
+        named, the way every tree view since the file manager has done it."""
+        item = self.table.itemAt(pos)
+        if item is None:
+            return
+        self.table.selectRow(item.row())
+        label = item.data(Qt.UserRole)
+        done = label in self._read_done()
+        menu = QMenu(self.table)
+        load = menu.addAction(f"Load tree {label} with neighbours")
+        load.triggered.connect(self.on_load_tree)
+        mark = menu.addAction(
+            f"Mark tree {label} {'not done' if done else 'done'}"
+        )
+        mark.triggered.connect(lambda: self.set_done(label, not done))
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def set_done(self, label: int, done: bool) -> None:
+        """Mark a tree done or not from this table."""
+        saved = self.on_mark_done(label, done) if self.on_mark_done else None
+        if saved is None:
+            update_done(self.c.catalog.path, label, done)
+            self.c.view.status = (
+                f"Tree {label} marked {'done' if done else 'not done'}"
+            )
+        self._populate()
 
     def refresh(self) -> None:
         """Re-read done-state and point counts; call after external changes

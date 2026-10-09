@@ -103,48 +103,23 @@ def test_points_moved_into_a_hidden_tree_disappear(panel):
     assert not view.shown[TREE1_HALF].any()
 
 
-# -- where the Point class box lives ------------------------------------------
-def test_the_class_box_floats_over_the_canvas_by_default(panel):
-    """Next to the points it labels — and a project with no class field
-    never has to think about it at all."""
+# -- the Point class box ---------------------------------------------------
+def test_the_class_box_floats_over_the_canvas(panel):
+    """Next to the points it labels."""
     p, view = panel
-    assert not p.class_in_top_bar
-    assert p._class_overlay.parent() is view.native
-
-
-def test_asking_for_it_in_the_top_bar_docks_it(panel):
-    p, _ = panel
-    p._set_class_in_top_bar(True)
-    assert p._class_overlay.parent() is p.top_bar
-    # One box, moved — not a second copy to keep in step with the first.
-    # (isHidden, not isVisible: the bar itself has no window here.)
-    assert not p._class_overlay.isHidden()
-    assert p._top_bar_row.indexOf(p._class_overlay) >= 0
-
-
-def test_turning_it_off_floats_it_back_over_the_canvas(panel):
-    p, view = panel
-    p._set_class_in_top_bar(True)
-    p._set_class_in_top_bar(False)
     assert p._class_overlay.parent() is view.native
     assert p._class_overlay.width() == p.OVERLAY_W
 
 
-def test_the_docked_box_is_shorter_than_the_floating_one(panel):
-    """The top bar grows to its tallest box, so the class list scrolls
-    sooner there rather than pushing the canvas down."""
-    p, _ = panel
-    floating = p.class_scroll.height()
-    p._set_class_in_top_bar(True)
-    assert p.class_scroll.height() < floating
-
-
-def test_the_class_buttons_still_work_from_the_bar(panel):
-    """The same widgets moved, so the wiring has to come with them."""
+def test_the_box_is_no_taller_than_its_classes_need(panel):
+    """Two classes are one row, not three rows with two of them blank."""
     p, _ = panel
     p.c.class_field = "classification"
     p.c.class_names = {1: "leaf", 2: "wood"}
     p._rebuild_class_buttons()
-    p._set_class_in_top_bar(True)
-    assert [b.text().strip() for b in p._class_btns] == ["leaf", "wood"]
-    assert p.class_color_cb.isEnabled()
+    one_row = p.class_scroll.height()
+    p.c.class_names = {k: f"c{k}" for k in range(6)}
+    p._rebuild_class_buttons()
+    assert p.class_scroll.height() > one_row
+
+

@@ -34,7 +34,7 @@ import threading
 import time
 
 import numpy as np
-from qtpy.QtCore import QRectF, QSize, Qt
+from qtpy.QtCore import QEvent, QRectF, QSize, Qt
 from qtpy.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from qtpy.QtWidgets import (
     QAbstractItemView,
@@ -561,6 +561,7 @@ class SegFixWidget(QWidget):
         self._bbox_ids: set[int] = set()
         self._bbox_busy = False
         controller.on_cloud_changed = self._on_cloud_changed
+        controller.view.on_pick_tree = self.on_pick_tree
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
@@ -584,11 +585,12 @@ class SegFixWidget(QWidget):
         self.tree_table.horizontalHeaderItem(0).setToolTip(
             "Whether this tree has been marked reviewed"
         )
-        self.tree_table.horizontalHeaderItem(self.HIDE_COL).setIcon(icon("hide"))
+        # Text-only headers: with an icon beside each of these two the
+        # five columns outgrew the dock, the stretch column (Tree ID) was
+        # squeezed to "Tree II" and a scrollbar appeared under the table.
         self.tree_table.horizontalHeaderItem(self.HIDE_COL).setToolTip(
             "Hide this tree from the 3D view"
         )
-        self.tree_table.horizontalHeaderItem(self.FADE_COL).setIcon(icon("fade"))
         self.tree_table.horizontalHeaderItem(self.FADE_COL).setToolTip(
             "Fade this tree in the 3D view - ghosted for context, but still "
             "shown and still selectable"
@@ -608,6 +610,21 @@ class SegFixWidget(QWidget):
         self.tree_table.itemSelectionChanged.connect(self._on_table_selection)
         self.tree_table.itemChanged.connect(self._on_tree_item_changed)
         tlay.addWidget(self.tree_table)
+        # What an empty queue is for, written where the rows will be. Before
+        # the first tree is loaded this table is the largest blank thing on
+        # the screen, and the status bar line that says what to do is the
+        # smallest.
+        self.tree_hint = QLabel(
+            "Nothing loaded yet.\n\nDouble-click a tree in All Trees to "
+            "load it here with its neighbours.",
+            self.tree_table.viewport(),
+        )
+        self.tree_hint.setObjectName("treeHint")
+        self.tree_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tree_hint.setWordWrap(True)
+        self.tree_hint.setStyleSheet("color: gray; background: transparent;")
+        self.tree_hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.tree_table.viewport().installEventFilter(self)
 
         nav_row = QHBoxLayout()
         prev_btn = QPushButton("Prev")
@@ -655,7 +672,11 @@ class SegFixWidget(QWidget):
         self.move_btn.setIconSize(QSize(18, 18))
         self.move_btn.setCheckable(True)
         self.move_btn.setChecked(True)
-        self.move_btn.setToolTip("Drag rotates the view")
+        self.move_btn.setToolTip(
+            "Drag rotates the view, right-drag pans, wheel zooms. "
+            "Double-click a point to rotate around it; Ctrl+click a point "
+            "to make its tree the current tree."
+        )
         self.move_btn.clicked.connect(self.on_move_mode)
         interaction.addWidget(self.move_btn)
         self.lasso_btn = QPushButton("Lasso (Q)")
@@ -885,10 +906,6 @@ class SegFixWidget(QWidget):
         self._lasso_section_mask: np.ndarray | None = None
         self._update_lasso_section_label()
 
-        # Kept so the "Point class" box can be docked in here on request —
-        # it floats over the canvas by default (see _set_class_in_top_bar).
-        self._top_bar_row = top_bar_row
-        self._class_bar_slot = top_bar_row.count()
         top_bar_row.addStretch()
 
         # -- fixing the current tree --------------------------------------
@@ -1087,60 +1104,6 @@ class SegFixWidget(QWidget):
         self._class_btns: list[QPushButton] = []
         self._class_codes: list[int] = []
 
-    #: Rows of class buttons before the box scrolls, floating and docked.
-    #: Fewer in the bar: the whole strip grows to its tallest box, and a
-    #: half-height scroll there costs less than pushing the canvas down.
-    CLASS_ROWS_DOCKED = 2
-    CLASS_BAR_W = 360
-
-    @property
-    def class_in_top_bar(self) -> bool:
-        return self._class_docked
-
-    def _set_class_in_top_bar(self, docked: bool) -> None:
-        """Move the Point class box between the canvas and the top bar.
-
-        Driven by Preferences ▸ Point Class Box ▸ In the top bar, not by a
-        tick in the View group: it is a choice about where the window puts
-        things rather than about what the view shows, and the bar is wide
-        enough as it is. On a 1920-wide screen one more checkbox there ran
-        the section boxes under the side panel.
-
-        Reparented, not duplicated: one set of buttons, one colour-by-class
-        state, so there is no second copy to keep in step. Floating it is
-        the default — the box is next to the points it labels there — but it
-        covers the view, which on a laptop screen is most of it.
-        """
-        box = getattr(self, "_class_overlay", None)
-        if box is None or docked == self._class_docked:
-            return
-        self._class_docked = docked
-        row_h = self._neighbour_row_height()
-        if docked:
-            rows = self.CLASS_ROWS_DOCKED
-            box.setParent(None)
-            box.setStyleSheet("")  # a plain group box, like its neighbours
-            # A constant width, like the section boxes beside it: left to
-            # the layout the box is squeezed to whatever is spare and the
-            # class names elide. Wider than it floats, because two buttons
-            # sit side by side and the bar has room the canvas doesn't.
-            box.setFixedWidth(self.CLASS_BAR_W)
-            self._top_bar_row.insertWidget(self._class_bar_slot, box)
-        else:
-            rows = self.CLASS_ROWS
-            self._top_bar_row.removeWidget(box)
-            box.setParent(self.c.view.native)
-            box.setFixedWidth(self.OVERLAY_W)
-            self._apply_overlay_theme(theme.current())
-        self.class_scroll.setFixedHeight(rows * row_h + (rows - 1) * 4)
-        box.show()
-        if not docked:
-            box.raise_()
-            self._position_current_tree_overlay()
-
-    #: True while the box is docked in the top bar rather than floating.
-    _class_docked = False
-
     def _on_setup_classes(self) -> None:
         if self.on_setup_classes is not None:
             self.on_setup_classes()
@@ -1180,8 +1143,8 @@ class SegFixWidget(QWidget):
             btn.clicked.connect(
                 lambda _checked=False, c=code: self.on_set_class(c)
             )
-            self.class_grid.addWidget(btn, i // 2, i % 2)
             self._class_btns.append(btn)
+        self._layout_class_buttons()
         self.class_color_cb.setEnabled(has_field)
         self.new_class_btn.setEnabled(has_field)
         self.class_scroll.setVisible(has_field)
@@ -1192,9 +1155,51 @@ class SegFixWidget(QWidget):
             self.class_info.setText(
                 "No class field - Set up… to edit leaf, wood, ground…"
             )
-        if not self._class_docked:
-            self._class_overlay.adjustSize()
-            self._position_current_tree_overlay()
+        self._class_overlay.adjustSize()
+        self._position_current_tree_overlay()
+
+    def _class_columns(self) -> int:
+        """Two columns of class buttons when every name fits in half the
+        box, else one. ASPRS names ("Medium vegetation", "Low point
+        (noise)") are twice the width of "leaf", and in two columns they
+        were clipped mid-word with nothing to say so."""
+        if not self._class_btns:
+            return 2
+        inner = self.OVERLAY_W - 2 * self._CLASS_BOX_MARGIN
+        widest = max(self._class_button_width(b) for b in self._class_btns)
+        return 2 if widest <= (inner - self.class_grid.spacing()) // 2 else 1
+
+    #: Group-box frame plus layout margins either side of the class grid.
+    _CLASS_BOX_MARGIN = 12
+
+    @staticmethod
+    def _class_button_width(btn) -> int:
+        """What a class button needs to show its whole name: text, keycap,
+        and the padding its style sheet gives it."""
+        text_w = btn.fontMetrics().horizontalAdvance(btn.text())
+        icon_w = btn.iconSize().width() + 4 if not btn.icon().isNull() else 0
+        return text_w + icon_w + 16
+
+    def _layout_class_buttons(self) -> None:
+        """Lay the class buttons out in :meth:`_class_columns` columns and
+        size the scroll area to the rows that gives, up to a limit."""
+        cols = self._class_columns()
+        for btn in self._class_btns:
+            self.class_grid.removeWidget(btn)
+        for i, btn in enumerate(self._class_btns):
+            self.class_grid.addWidget(btn, i // cols, i % cols)
+        self._class_cols = cols
+        rows_needed = -(-len(self._class_btns) // cols) if self._class_btns else 1
+        # A single column may show one more row than two did: four ASPRS
+        # classes in one column would otherwise put the fourth, and its
+        # Ctrl+4, below the fold.
+        limit = self.CLASS_ROWS + (1 if cols == 1 else 0)
+        rows = max(1, min(rows_needed, limit))
+        row_h = self._neighbour_row_height()
+        self.class_scroll.setFixedHeight(rows * row_h + (rows - 1) * 4)
+
+    #: Columns the class buttons are laid out in right now.
+    _class_cols = 2
 
     def _on_color_by_class(self, checked: bool) -> None:
         self.c.color_by_class = checked
@@ -1291,8 +1296,6 @@ class SegFixWidget(QWidget):
                     getattr(self, "_class_overlay", None)):
             if box is None:
                 continue
-            if box is getattr(self, "_class_overlay", None) and self._class_docked:
-                continue  # docked in the bar: styled like the boxes beside it
             name = box.objectName()
             box.setStyleSheet(
                 f"QGroupBox#{name} {{"
@@ -1506,7 +1509,7 @@ class SegFixWidget(QWidget):
                     item.setBackground(QColor(60, 110, 70))
                 table.setItem(row, column, item)
             table.item(row, self.STEM_COL).setToolTip(
-                "Scored on " + ", ".join(candidate.used)
+                f"{candidate.stem.label}\nScored on " + ", ".join(candidate.used)
             )
         self.inventory_label.setText(self._inventory_summary(stats, linked))
         self.unlink_btn.setEnabled(linked is not None)
@@ -1796,7 +1799,7 @@ class SegFixWidget(QWidget):
         x = max(margin, native.width() - box.width() - margin)
         box.move(x, margin)
         classes = getattr(self, "_class_overlay", None)
-        if classes is not None and not self._class_docked:
+        if classes is not None:
             classes.move(x, margin + box.height() + 6)
 
     def on_toggle_lasso(self, checked: bool) -> None:
@@ -1995,6 +1998,7 @@ class SegFixWidget(QWidget):
         self.tree_table.setSortingEnabled(True)
         self.tree_table.blockSignals(False)
         self._table_updating = False
+        self._place_tree_hint()
         self._update_done_title()
         self._sync_current({int(t) for t in vals})
         self._sync_view_toggles()
@@ -2089,6 +2093,70 @@ class SegFixWidget(QWidget):
             self.c.view.status = "All trees done - save when ready"
             return
         self._set_current(nxt)
+
+    def eventFilter(self, obj, event):
+        """Keep the empty-queue hint centred over the table's viewport."""
+        table = getattr(self, "tree_table", None)
+        if table is not None and obj is table.viewport():
+            if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+                self._place_tree_hint()
+        return super().eventFilter(obj, event)
+
+    def _place_tree_hint(self) -> None:
+        hint = getattr(self, "tree_hint", None)
+        if hint is None:
+            return
+        viewport = self.tree_table.viewport()
+        hint.setGeometry(0, 0, viewport.width(), viewport.height())
+        hint.setVisible(self.tree_table.rowCount() == 0)
+        hint.raise_()
+
+    def on_pick_tree(self, idx: int) -> None:
+        """Ctrl+click on a point in move mode: review that point's tree.
+
+        The way 3D Forest and CloudCompare's picking work, and the missing
+        half of the table: the table finds a tree by number, this finds it
+        by pointing. Only trees count, so a click on the ground or on noise
+        changes nothing; and the camera stays put, since the tree is
+        already in view, that being how it was clicked.
+        """
+        if idx < 0 or idx >= self.c.cloud.n_points:
+            return
+        tid = int(self.c.cloud.labels[idx])
+        if tid in (UNASSIGNED, NOISE):
+            self.c.view.status = "That point belongs to no tree"
+            return
+        if tid == self.current:
+            self.c.view.status = f"Tree {tid} is already the current tree"
+            return
+        self._set_current(tid, fly=False)
+        self.c.view.status = f"Tree {tid} is now the current tree"
+
+    def on_fit_cloud(self) -> None:
+        """View ▸ Fit whole cloud (Home): frame everything loaded."""
+        self.c.view.reset_view()
+        self._sync_inside_button()
+        self.c.view.status = "Fitted the loaded cloud to the view"
+
+    def on_fly_to_current(self) -> None:
+        """Tree ▸ Fly to current tree: frame the tree under review again."""
+        if self._needs_current():
+            self._fly_to(self.current)
+            self._sync_inside_button()
+
+    def mark_done(self, tid: int, done: bool) -> str | None:
+        """Mark a tree done (or not) from outside the queue: the All Trees
+        table's context menu. The tree need not be loaded; the done list
+        is the project's, not the loaded set's.
+
+        Returns the sidecar path it was saved to, or ``None`` when there is
+        nowhere to save yet: before the first tree loads this panel has no
+        cloud, so no sidecar, and the caller writes the file itself.
+        """
+        if not self._progress_path():
+            return None
+        self._mark_done(tid, done)
+        return self._progress_path()
 
     def _fly_to(self, tid: int) -> None:
         """Centre the camera on the tree and zoom to roughly fit it."""

@@ -320,19 +320,34 @@ where another tree's or the ground's point was the one kept.
 
 ## Editing workflow
 
-The menu bar carries the session-level actions: **File ▸ Open Project…**
-(`Ctrl+O`, reopens the startup dialog and switches project without a manual
-restart), **Save Project** (`Ctrl+S`) and **Export Trees…**; **Edit ▸ Undo / Redo** (`Ctrl+Z` /
-`Ctrl+Shift+Z`); **Inventory ▸ Load Stem Map… / Align to Cloud… / Export
-Matches… / Clear Stem Map** (see
+The menu bar lists everything the panels can do, each action with its key
+beside it, so the menus double as the reference while the keys are being
+learned. **File ▸ Open Project…** (`Ctrl+O`) reopens the startup dialog and
+switches project without a manual restart, **Open Recent** lists the other
+projects in the registry for a one-click switch, **Save Project** (`Ctrl+S`)
+and **Export Trees…**. **Edit** holds Undo / Redo (`Ctrl+Z` /
+`Ctrl+Shift+Z`), the selection tools (Move, Lasso, Lasso tree, Cluster, Draw
+lasso section) with the cluster gap steps and Invert selection, and **Point
+Classes…**. **Tree** is the review loop: Previous / Next / Mark done and go
+to next, then Add, Split, Unassign and Noise for the selection, and Fly to
+current tree. **View** has the visibility toggles (unassigned points, hide
+or fade the other trees, colour by class, the two section tools), the
+**Look from** directions, **Inside the cloud** and **Fit whole cloud**
+(`Home`). **Inventory ▸ Load Stem Map… / Align
+to Cloud… / Export Matches… / Clear Stem Map** (see
 [Field inventory matching](#field-inventory-stem-map-matching));
 **Preferences ▸ Theme ▸ Light / Dark** (light on a first run), applied
-immediately and remembered (via `QSettings`) for next launch; and **Help ▸ About Segfix**
-for the version, links, and full GPL licence.
+immediately and remembered (via `QSettings`) for next launch; **Help ▸
+Keyboard Shortcuts…** (`F1`) for every key and mouse gesture on one page,
+which can stay open beside the window; and **Help ▸ About Segfix** for the
+version, links, and full GPL licence.
 
 Navigation matches CloudCompare: clouds open **Z-up**, **left-drag rotates,
 right-drag pans, wheel zooms**. **Double-click a point** while navigating to
-recentre the orbit on it. A metric scale bar and an X/Y/Z orientation tripod
+recentre the orbit on it, and **Ctrl+click a point** to make its tree the
+current tree, the way 3D Forest picks a tree: the table finds a tree by
+number, this finds it by pointing. The camera stays where it is, since the
+tree is already in view. A metric scale bar and an X/Y/Z orientation tripod
 sit in the bottom-left of the view; the **point size** spinner floats in the
 top-left, with CloudCompare's standard view buttons below it: **Top**,
 **Front**, **Back**, **Left**, **Right** and **Bottom** turn the camera to look
@@ -352,10 +367,15 @@ lens is, and scrolling pulls back out. Framing a whole tree, by stepping
 through the queue or loading another tree, steps back outside on its own.
 
 The right-hand panel holds two tables. **All Trees** (top) lists every tree in the
-file, a Done column (`✓` when reviewed), tree ID and point count, with a
-running `N/M trees (X %) done` line above it, **double-click a row** to load
-that
-tree plus its spatial neighbours into the 3D view. **Selected Tree +
+file, a Done column (`✓` when reviewed), tree ID with the colour it has in
+the view, and point count, with a running `N/M trees (X %) done` line and a
+progress bar above it. **Double-click a row** (or press Enter on it) to load
+that tree plus its spatial neighbours into the 3D view. A plot is a few
+hundred trees, so there is a **Find tree ID** box above the table, which
+narrows it to the IDs starting with what you type (Enter lands on the first
+match, a second Enter loads it), and a **To do only** switch that hides the
+finished trees. **Right-click a row** for the same things as a menu: load
+it, or mark it done or not done without loading it. **Selected Tree +
 Neighbours** (below) is the review queue for what's currently loaded: a Done
 checkbox per tree, a 👁 column to hide one from the view, a **Fade** column to
 ghost one (still shown, still selectable), and the Prev / Done buttons. Both
@@ -406,9 +426,11 @@ to the right edge of the 3D view, next to the points they act on.
    | `C` | Cross section on/off |
    | `Shift+Q` | Draw a lasso-section outline |
    | `Shift+C` | Lasso section on/off |
+   | `Home` | Fit the whole loaded cloud in the view |
    | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo (also on the **Edit** menu) |
    | `Ctrl+S` | Save Project (also on the **File** menu) |
    | `Ctrl+O` | Open another project |
+   | `F1` | Keyboard shortcuts, this table and the mouse gestures, in the app |
 
    Every key sits under the left hand, so the right one never leaves the
    mouse: the tools on `Q` `W` `E` with the cluster gap beside them on
@@ -499,11 +521,9 @@ a tree's fade still applies. **New class…** adds a class numbered one above
 the rest and gives it to the selection, if there is one. Class edits undo and
 redo along with the tree edits, in the order they were made.
 
-The box floats over the 3D view, under **Current tree**, which on a laptop
-screen is most of the view. **Point class in top bar** in the **View** group
-moves it into the top strip instead, beside Cross section and Lasso section:
-the same box with the same buttons, not a second copy. It floats by default,
-since a project with no class field never needs it.
+The box floats over the 3D view, under **Current tree**, next to the points
+it labels. Its buttons fit their names: short names sit two to a row, and
+longer ones such as the ASPRS classes get a row each.
 
 **Save** writes only the class values that changed, like the tree IDs, so
 every other byte of the file stays as it was. In LAS point formats 0–5 the

@@ -295,50 +295,118 @@ def _about(parent) -> None:
     box.exec()
 
 
-def _open_project(win, panel, scene=None) -> None:
-    """Menu "Open Project…": offer to save, pick another project in the
-    startup dialog, then re-exec segfix on it. Re-exec rather than an
-    in-place swap so the catalog, docks and GL context all rebuild cleanly.
+def _confirm_leaving(win, panel, scene=None) -> bool:
+    """Offer to save before switching project. ``False`` means stay.
 
     ``scene`` (the :class:`~segfix.scene_ui.SceneController`) is what knows
     whether the session has unsaved edits: the loaded tree's undo stack only
     covers the tree on screen, not the ones visited before it.
     """
-    import os
-
     from qtpy.QtWidgets import QMessageBox
-
-    from .startup_ui import choose_project
 
     # can_undo is a property, not a method: calling it raised TypeError here,
     # which PyQt turns into an abort, and Open Project killed the window on
     # every use since it was added (issue #3).
     unsaved = (scene.has_unsaved_edits() if scene is not None
                else panel.c.cloud.can_undo)
-    if unsaved:
-        answer = QMessageBox.question(
-            win,
-            "Open another project",
-            "Save changes to the current project first?",
-            QMessageBox.StandardButton.Save
-            | QMessageBox.StandardButton.Discard
-            | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Save,
-        )
-        if answer == QMessageBox.StandardButton.Cancel:
-            return
-        if answer == QMessageBox.StandardButton.Save:
-            panel.on_save()
+    if not unsaved:
+        return True
+    answer = QMessageBox.question(
+        win,
+        "Open another project",
+        "Save changes to the current project first?",
+        QMessageBox.StandardButton.Save
+        | QMessageBox.StandardButton.Discard
+        | QMessageBox.StandardButton.Cancel,
+        QMessageBox.StandardButton.Save,
+    )
+    if answer == QMessageBox.StandardButton.Cancel:
+        return False
+    if answer == QMessageBox.StandardButton.Save:
+        panel.on_save()
+    return True
 
-    choice = choose_project()
-    if choice is None:
-        return
-    open_path, registry_path, kind = choice
+
+def _switch_to(open_path: str, registry_path: str, kind: str) -> None:
+    """Re-exec segfix on another project. Re-exec rather than an in-place
+    swap so the catalog, docks and GL context all rebuild cleanly."""
+    import os
+
     # main() records it in the registry after the relaunch.
     os.environ["SEGFIX_OPEN"] = open_path
     os.environ["SEGFIX_OPEN_REGISTRY"] = registry_path
     os.environ["SEGFIX_OPEN_KIND"] = kind
     _relaunch()
+
+
+def _open_project(win, panel, scene=None) -> None:
+    """Menu "Open Project…": offer to save, pick another project in the
+    startup dialog, then re-exec segfix on it."""
+    from .startup_ui import choose_project
+
+    if not _confirm_leaving(win, panel, scene):
+        return
+    choice = choose_project()
+    if choice is None:
+        return
+    _switch_to(*choice)
+
+
+def _open_recent(win, panel, scene, entry: dict) -> None:
+    """File ▸ Open Recent ▸ one of the registry's entries."""
+    from qtpy.QtWidgets import QMessageBox
+
+    from . import workspace
+
+    if not _confirm_leaving(win, panel, scene):
+        return
+    path, kind = entry["path"], entry.get("type", "file")
+    open_path = path
+    if kind == "workspace":
+        try:
+            open_path = str(workspace.data_file(path))
+        except (OSError, KeyError, ValueError) as exc:
+            QMessageBox.critical(
+                win, "Can't open project",
+                f"{path} doesn't look like a valid project folder anymore: "
+                f"{exc}",
+            )
+            return
+    _switch_to(open_path, path, kind)
+
+
+def _fill_recent_menu(menu, win, panel, scene, current: str | None) -> None:
+    """Rebuild the Open Recent submenu from the registry each time it opens,
+    so a project opened in another window shows up without a restart."""
+    from . import registry
+
+    menu.clear()
+    entries = registry.load_registry()
+    shown = 0
+    for entry in entries:
+        path = entry["path"]
+        if current and _same_project(path, current):
+            continue
+        age = registry.describe_age(entry.get("last_opened", ""))
+        act = menu.addAction(path + (f"   ({age})" if age else ""))
+        act.setToolTip(path)
+        act.triggered.connect(
+            lambda _checked=False, e=entry: _open_recent(win, panel, scene, e)
+        )
+        shown += 1
+    if not shown:
+        none = menu.addAction("No other recent projects")
+        none.setEnabled(False)
+
+
+def _same_project(registry_path: str, open_path: str) -> bool:
+    """Whether a registry entry is the project already open: the entry is
+    the project folder, while the window has the data file inside it."""
+    import os
+
+    a = os.path.abspath(registry_path)
+    b = os.path.abspath(open_path)
+    return a == b or os.path.dirname(b) == a
 
 
 #: What a relaunched interpreter runs: -c, so it doesn't matter how segfix
@@ -461,13 +529,43 @@ def _export_trees(win, panel, catalog) -> None:
     )
 
 
-def _build_menus(win, panel, catalog=None, scene=None) -> None:
-    """Window menu bar: File (open/save the project), Edit (undo/redo — the
-    former "Session" panel box), Preferences (colour theme), Help (about)."""
+def _show_key(action, key: str) -> None:
+    """Show ``key`` beside a menu action without binding it a second time.
+
+    The key is already a ``QShortcut`` on the window. The same key on the
+    action too would be ambiguous, and Qt answers an ambiguous key by
+    firing neither. So the action gets the key with a widget-only context:
+    Qt draws it in the menu's shortcut column, but only a focused menu
+    could ever press it, and the window's own shortcut is the one that
+    fires. (Text after a tab draws the same way, but not in every native
+    menu bar.)
+    """
+    from qtpy.QtCore import Qt
+    from qtpy.QtGui import QKeySequence
+
+    action.setShortcut(QKeySequence(key))
+    action.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
+
+
+def _build_menus(win, panel, catalog=None, scene=None,
+                 open_path: str | None = None) -> None:
+    """Window menu bar.
+
+    File (open/save the project), Edit (undo/redo, the selection tools),
+    Tree (the review loop's edits and queue), View (what the canvas shows
+    and where it looks from), Inventory, Preferences, Help.
+
+    Every action the panel already has is listed here with its key, the way
+    CloudCompare's and Blender's menus double as the reference for theirs:
+    a menu is where a new user looks first, and a key seen beside the thing
+    it does is a key learned. The keys themselves stay bound as the panel's
+    ``QShortcut``s (see :func:`segfix.widgets.bind_shortcuts`); the menu
+    only shows them (see :func:`_show_key`).
+    """
     from qtpy.QtGui import QActionGroup
     from qtpy.QtWidgets import QApplication
 
-    from . import inventory_ui, theme
+    from . import inventory_ui, shortcuts_ui, theme
 
     bar = win.menuBar()
 
@@ -475,6 +573,11 @@ def _build_menus(win, panel, catalog=None, scene=None) -> None:
     open_act = file_menu.addAction("Open Project…")
     open_act.setShortcut("Ctrl+O")
     open_act.triggered.connect(lambda: _open_project(win, panel, scene))
+    recent_menu = file_menu.addMenu("Open Recent")
+    recent_menu.setToolTipsVisible(True)
+    recent_menu.aboutToShow.connect(
+        lambda: _fill_recent_menu(recent_menu, win, panel, scene, open_path)
+    )
     save_act = file_menu.addAction("Save Project")
     save_act.setShortcut("Ctrl+S")
     save_act.triggered.connect(panel.on_save)
@@ -489,10 +592,125 @@ def _build_menus(win, panel, catalog=None, scene=None) -> None:
     redo_act = edit_menu.addAction("Redo")
     redo_act.setShortcut("Ctrl+Shift+Z")
     redo_act.triggered.connect(panel.on_redo)
+    edit_menu.addSeparator()
+    # The selection tools: one of these is always the mode, and the checked
+    # one says which. Radio-style, like the buttons in the top bar.
+    modes = QActionGroup(win)
+    modes.setExclusive(True)
+    mode_actions = []
+    for text, key, button, slot in (
+        ("Move the camera", "Esc", panel.move_btn, panel.on_move_mode),
+        ("Lasso", "Q", panel.lasso_btn,
+         lambda: panel.lasso_btn.setChecked(True)),
+        ("Lasso tree", "W", panel.tree_lasso_btn,
+         lambda: panel.tree_lasso_btn.setChecked(True)),
+        ("Cluster", "E", panel.cluster_btn,
+         lambda: panel.cluster_btn.setChecked(True)),
+        ("Draw lasso section", "Shift+Q", panel.section_draw_btn,
+         lambda: panel.section_draw_btn.setChecked(True)),
+    ):
+        act = edit_menu.addAction(text)
+        _show_key(act, key)
+        act.setCheckable(True)
+        modes.addAction(act)
+        act.triggered.connect(lambda _c=False, s=slot: s())
+        mode_actions.append((act, button))
+    edit_menu.addSeparator()
+    gap_in = edit_menu.addAction("Tighten cluster gap")
+    _show_key(gap_in, "R")
+    gap_in.triggered.connect(lambda: panel.step_cluster_gap(-1))
+    gap_out = edit_menu.addAction("Loosen cluster gap")
+    _show_key(gap_out, "T")
+    gap_out.triggered.connect(lambda: panel.step_cluster_gap(1))
+    edit_menu.addSeparator()
+    invert_act = edit_menu.addAction("Invert selection")
+    _show_key(invert_act, "B")
+    invert_act.triggered.connect(panel.on_invert_selection)
     if catalog is not None:
         edit_menu.addSeparator()
         classes_act = edit_menu.addAction("Point Classes…")
         classes_act.triggered.connect(panel._on_setup_classes)
+
+    def _sync_modes() -> None:
+        for act, button in mode_actions:
+            act.setChecked(button.isChecked())
+
+    edit_menu.aboutToShow.connect(_sync_modes)
+
+    # Tree: the loop itself. What the floating "Current tree" column does,
+    # and the Prev / Done buttons under the queue.
+    tree_menu = bar.addMenu("&Tree")
+    prev_act = tree_menu.addAction("Previous tree")
+    _show_key(prev_act, "Z")
+    prev_act.triggered.connect(lambda: panel._step(-1))
+    next_act = tree_menu.addAction("Next tree")
+    _show_key(next_act, "V")
+    next_act.triggered.connect(lambda: panel._step(1))
+    done_act = tree_menu.addAction("Mark done and go to next")
+    _show_key(done_act, "Space")
+    done_act.triggered.connect(panel.on_done_next)
+    tree_menu.addSeparator()
+    add_act = tree_menu.addAction("Add selection to current tree")
+    _show_key(add_act, "A")
+    add_act.triggered.connect(panel.on_add)
+    split_act = tree_menu.addAction("Split selection off as new tree")
+    _show_key(split_act, "S")
+    split_act.triggered.connect(panel.on_create_new)
+    unassign_act = tree_menu.addAction("Unassign selection")
+    _show_key(unassign_act, "D")
+    unassign_act.triggered.connect(panel.on_unassign)
+    noise_act = tree_menu.addAction("Mark selection as noise")
+    _show_key(noise_act, "X")
+    noise_act.triggered.connect(panel.on_noise)
+    tree_menu.addSeparator()
+    fly_act = tree_menu.addAction("Fly to current tree")
+    fly_act.triggered.connect(panel.on_fly_to_current)
+
+    # View: what is drawn, and from where.
+    view_menu = bar.addMenu("&View")
+    # Toggles flip the panel's own checkbox, so there is one state, the
+    # box's; the menu reads it back each time it opens (_sync_toggles).
+    toggles = []
+    for text, key, box in (
+        ("Show unassigned points", "F", panel.show_unassigned),
+        ("Hide other trees", "G", panel.hide_others_cb),
+        ("Fade other trees", "Shift+G", panel.fade_others_cb),
+        ("Colour by point class", "Shift+F", panel.class_color_cb),
+    ):
+        act = view_menu.addAction(text)
+        _show_key(act, key)
+        act.setCheckable(True)
+        act.triggered.connect(lambda _c=False, b=box: b.toggle())
+        toggles.append((act, box))
+    view_menu.addSeparator()
+    for text, key, box in (
+        ("Cross section", "C", panel.cross_enable),
+        ("Lasso section", "Shift+C", panel.lasso_section_enable),
+    ):
+        act = view_menu.addAction(text)
+        _show_key(act, key)
+        act.setCheckable(True)
+        act.triggered.connect(lambda _c=False, b=box: b.toggle())
+        toggles.append((act, box))
+    view_menu.addSeparator()
+    look_menu = view_menu.addMenu("Look from")
+    for name, (label, tip) in panel._VIEW_BUTTONS.items():
+        act = look_menu.addAction(label)
+        act.setToolTip(tip)
+        act.triggered.connect(lambda _c=False, n=name: panel.c.view.set_view(n))
+    inside_act = view_menu.addAction("Inside the cloud")
+    inside_act.setCheckable(True)
+    inside_act.triggered.connect(lambda _c=False: panel.inside_btn.toggle())
+    toggles.append((inside_act, panel.inside_btn))
+    fit_act = view_menu.addAction("Fit whole cloud")
+    fit_act.setShortcut("Home")
+    fit_act.triggered.connect(panel.on_fit_cloud)
+
+    def _sync_toggles() -> None:
+        for act, box in toggles:
+            act.setChecked(box.isChecked())
+
+    view_menu.aboutToShow.connect(_sync_toggles)
 
     # Inventory: a field stem map drawn over the cloud, and which measured
     # tree each segmented one is (see segfix.inventory).
@@ -516,12 +734,6 @@ def _build_menus(win, panel, catalog=None, scene=None) -> None:
     )
 
     pref_menu = bar.addMenu("&Preferences")
-    class_place = pref_menu.addAction("Point class box in the top bar")
-    class_place.setCheckable(True)
-    class_place.setToolTip(
-        "Move the Point class box out of the 3D view and into the top bar"
-    )
-    class_place.toggled.connect(panel._set_class_in_top_bar)
     theme_menu = pref_menu.addMenu("Theme")
     theme_group = QActionGroup(win)
     theme_group.setExclusive(True)
@@ -535,6 +747,9 @@ def _build_menus(win, panel, catalog=None, scene=None) -> None:
         )
 
     help_menu = bar.addMenu("&Help")
+    keys_act = help_menu.addAction("Keyboard Shortcuts…")
+    keys_act.setShortcut("F1")
+    keys_act.triggered.connect(lambda: shortcuts_ui.show_shortcuts(win))
     about_act = help_menu.addAction("About segfix")
     about_act.triggered.connect(lambda: _about(win))
 
@@ -632,7 +847,11 @@ def _combined_panel(*widgets):
     panel in one right-hand dock (rather than a separate left dock).
 
     A vertical splitter, so the divider is draggable; it starts at roughly
-    25 % top / 75 % bottom and keeps that ratio as the dock resizes.
+    60 % top / 40 % bottom and keeps that ratio as the dock resizes. The
+    top table is the plot, hundreds of rows, and the one the eye scans to
+    pick the next tree; the bottom one is a tree and its neighbours, half a
+    dozen rows at most. It used to be the other way round, with four rows
+    of plot showing above a page of blank queue.
     """
     from qtpy.QtCore import Qt
     from qtpy.QtWidgets import QSplitter
@@ -642,8 +861,8 @@ def _combined_panel(*widgets):
         split.addWidget(w)
     split.setChildrenCollapsible(False)
     for i in range(split.count()):
-        split.setStretchFactor(i, 1 if i == 0 else 3)
-    split.setSizes([1000] + [3000] * (split.count() - 1))
+        split.setStretchFactor(i, 3 if i == 0 else 2)
+    split.setSizes([3000] + [2000] * (split.count() - 1))
     # Floor so the tables get room to breathe; the dock edge stays draggable.
     split.setMinimumWidth(360)
     return split
@@ -822,6 +1041,7 @@ def _run_scene(args) -> int:
     scene_ctrl = SceneController(view, catalog, seg, point_size=args.point_size)
     scene_panel = SceneWidget(scene_ctrl)
     panel.on_done_changed = scene_panel.refresh
+    scene_panel.on_mark_done = panel.mark_done
 
     top_dock = _bare_dock(panel.top_bar, "view")
     win.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, top_dock)
@@ -834,7 +1054,7 @@ def _run_scene(args) -> int:
     )
     win.resizeDocks([right_dock], [440], Qt.Orientation.Horizontal)
     panel.size_spin.setValue(args.point_size)
-    _build_menus(win, panel, catalog, scene_ctrl)
+    _build_menus(win, panel, catalog, scene_ctrl, open_path=args.cloud)
     bind_shortcuts(win, panel)
     names = (_class_names_from_settings(saved.get("class_names"))
              if saved.get("class_field") == catalog.class_field else {})

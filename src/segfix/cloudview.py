@@ -209,10 +209,14 @@ class CloudView:
         #: selection tool (lasso/cluster/…) is armed so a double-click there
         #: only feeds the tool — see SegFixWidget._refresh_double_click_mode.
         self.recenter_on_double_click = True
+        #: fn(point index) -> None, set by the panel: a Ctrl+click on a
+        #: point in move mode, to make that point's tree the current one.
+        self.on_pick_tree = None
         # Move mode: double-click a point to make it the camera's pivot, so
         # orbiting turns around whatever you're looking at rather than the
         # cloud's centroid.
         self.canvas.events.mouse_double_click.connect(self._on_double_click)
+        self.canvas.events.mouse_release.connect(self._on_release)
 
         self._redraw()
 
@@ -234,6 +238,35 @@ class CloudView:
         self.view.camera.center = tuple(float(c) for c in self._coords[idx])
         self.canvas.update()
         self.status = "Rotation centre moved to the clicked point"
+
+    #: How far a press may travel and still be a click rather than a drag.
+    CLICK_TOLERANCE_PX = 4.0
+
+    def _on_release(self, event) -> None:
+        """Ctrl+click a point (move mode only): hand its index to the panel.
+
+        A click, not a drag: the camera owns Ctrl-free drags, and a drag
+        that happened to start with Ctrl held should still orbit, not pick.
+        Only while the camera has the mouse; an armed tool's clicks are its.
+        """
+        if self.on_pick_tree is None or not self.view.camera.interactive:
+            return
+        if getattr(event, "button", None) != 1:
+            return
+        if "Control" not in getattr(event, "modifiers", ()):
+            return
+        press = getattr(event, "press_event", None)
+        if press is None:
+            return
+        dx = float(event.pos[0]) - float(press.pos[0])
+        dy = float(event.pos[1]) - float(press.pos[1])
+        if dx * dx + dy * dy > self.CLICK_TOLERANCE_PX ** 2:
+            return
+        idx = self.pick_point((float(event.pos[0]), float(event.pos[1])))
+        if idx is None:
+            self.status = "No point there"
+            return
+        self.on_pick_tree(idx)
 
     # -- points ---------------------------------------------------------
     def load_cloud(self, cloud, point_size: float | None = None) -> None:

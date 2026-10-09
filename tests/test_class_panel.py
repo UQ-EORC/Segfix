@@ -173,3 +173,41 @@ def test_without_a_class_field_the_box_says_how_to_get_one(panel):
     assert p._class_btns == []
     assert not p.class_color_cb.isEnabled()
     assert "Set up" in p.class_info.text()
+
+
+# -- the buttons fit their names ----------------------------------------------
+ASPRS = {2: "Ground", 3: "Low vegetation", 4: "Medium vegetation",
+         5: "High vegetation", 7: "Low point (noise)"}
+
+
+def _columns_used(p) -> int:
+    cols = set()
+    for i in range(p.class_grid.count()):
+        _row, col, _rs, _cs = p.class_grid.getItemPosition(i)
+        cols.add(col)
+    return len(cols)
+
+
+def test_short_names_sit_two_to_a_row(panel):
+    p, _seg, _cloud, _said = panel
+    assert _columns_used(p) == 2
+
+
+def test_long_names_get_a_column_each_rather_than_being_clipped(panel):
+    """ASPRS names are twice the width of "leaf"; two to a row they were
+    cut mid-word ("Medium ve", "Low point (") with nothing to say so."""
+    p, seg, _cloud, _said = panel
+    seg.class_names = dict(ASPRS)
+    p._rebuild_class_buttons()
+    assert _columns_used(p) == 1
+    inner = p.OVERLAY_W - 2 * p._CLASS_BOX_MARGIN
+    for btn in p._class_btns:
+        assert p._class_button_width(btn) <= inner, btn.text()
+
+
+def test_one_column_shows_a_row_more_so_ctrl_4_is_not_below_the_fold(panel):
+    p, seg, _cloud, _said = panel
+    seg.class_names = {k: ASPRS[k] for k in (2, 4, 5, 7)}
+    p._rebuild_class_buttons()
+    row_h = p._neighbour_row_height()
+    assert p.class_scroll.height() >= 4 * row_h + 3 * 4
