@@ -67,8 +67,20 @@ _DBH_PER_METRE = 0.018
 
 def tree_table(path: str):
     """Every tree in the cloud, with its position, height and (where the
-    points allow it) a fitted DBH."""
-    catalog = open_catalog(path)
+    points allow it) a fitted DBH. Positions are in the file's own frame.
+
+    The cloud is read with the global shift segfix would offer, because the
+    catalog holds coordinates as float32: a raw UTM northing is kept only to
+    about half a metre, and a circle fitted through points rounded that
+    coarsely is no circle. Read unshifted, a georeferenced plot got a
+    fitted DBH for half its trees and a height-based guess for the rest,
+    and the guesses were what the matching was then scored against.
+    """
+    from dataclasses import replace
+
+    catalog = open_catalog(
+        path, shift_prompt=lambda mins, maxs, suggested: suggested
+    )
     stats = inventory.stats_from_records(catalog.records)
     labels = catalog.file_labels()
     coords = np.asarray(catalog.coords)
@@ -81,6 +93,10 @@ def tree_table(path: str):
         # the test meaningless.
         if measured and measured[1] <= analysis.GOOD_FIT:
             fitted[tree.tree_id] = measured[0]
+    shift = catalog.global_shift
+    if shift is not None:
+        stats = [replace(t, x=t.x - float(shift[0]), y=t.y - float(shift[1]))
+                 for t in stats]
     return stats, fitted
 
 
