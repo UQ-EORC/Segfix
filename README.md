@@ -472,7 +472,14 @@ to the right edge of the 3D view, next to the points they act on.
 4. For a crowded canopy, two tools in the top bar cut the view down. Both fold
    into the same visibility as the 👁 column, so hidden points are also
    unselectable and the lasso can't grab through them:
-   - **Cross section (`C`)**, a slab along X, Y or Z, set with two sliders.
+   - **Cross section (`C`)**, a slab along X, Y or Z. It is drawn as an
+     orange box through the cloud with CloudCompare-style grips on it: drag
+     the arrow on either face to move that face, or the square in the
+     middle to slide the whole slab. **Ctrl+wheel** slides it a step and
+     **Ctrl+Shift+wheel** changes its thickness, in steps of a twentieth of
+     the slab, and both work while the lasso is armed, so a slab can be
+     nudged between one lasso and the next without leaving the canvas.
+     **Slab…** opens the sliders for the axis and a Reset.
    - **Lasso section (`Shift+C`)**, same idea, but the kept region is an
      outline you draw (`Shift+Q`, then drag). It's frozen into a point mask
      as you release, so the camera moves freely afterwards.

@@ -190,6 +190,15 @@ class CloudView:
         )
         self.stems.set_gl_state("translucent", depth_test=True, blend=True)
         self.stems.visible = False
+        # The cross-section slab, as a box: see SegFixWidget._draw_slab.
+        # Not depth-tested, like the tree box, so its edges read through
+        # the points it is cutting.
+        self.slab = scene.visuals.Line(
+            parent=self.view.scene, connect="segments", width=1.5,
+            antialias=True,
+        )
+        self.slab.set_gl_state(depth_test=False, blend=True)
+        self.slab.visible = False
 
         self._coords = np.empty((0, 3), np.float32)
         self._face_color = np.empty((0, 4), np.float32)
@@ -217,6 +226,14 @@ class CloudView:
         # cloud's centroid.
         self.canvas.events.mouse_double_click.connect(self._on_double_click)
         self.canvas.events.mouse_release.connect(self._on_release)
+        #: fn(step, resize) -> None, set by the panel: Ctrl+wheel nudges the
+        #: cross-section slab (Shift as well: its thickness). ``step`` is
+        #: +1 or -1 per notch.
+        self.on_slab_wheel = None
+        # Connected after the canvas' own dispatch, which puts it first in
+        # line (vispy's default position is 'first'): a Ctrl+wheel is
+        # blocked here before the camera can zoom on it.
+        self.canvas.events.mouse_wheel.connect(self._on_wheel)
 
         self._redraw()
 
@@ -238,6 +255,64 @@ class CloudView:
         self.view.camera.center = tuple(float(c) for c in self._coords[idx])
         self.canvas.update()
         self.status = "Rotation centre moved to the clicked point"
+
+    def _on_wheel(self, event) -> None:
+        """Ctrl+wheel belongs to the slab, whatever mode the canvas is in.
+
+        The wheel is the one input a selection tool never uses, so this
+        works mid-lasso without leaving the canvas or changing mode. Plain
+        wheel stays the camera's zoom.
+        """
+        if self.on_slab_wheel is None:
+            return
+        modifiers = getattr(event, "modifiers", ())
+        if "Control" not in modifiers:
+            return
+        dy = float(event.delta[1]) if getattr(event, "delta", None) is not None else 0.0
+        if dy == 0.0:
+            return
+        self.on_slab_wheel(1 if dy > 0 else -1, "Shift" in modifiers)
+        event.handled = True
+        event.blocked = True  # the camera must not zoom on it too
+
+    def axis_pixels_per_metre(self, point, axis: int):
+        """Where one metre along world ``axis`` from ``point`` lands on the
+        canvas, as a pixel vector; ``None`` if either end is behind the
+        camera. What a dragged handle needs to turn pixels into metres."""
+        base = np.asarray(point, dtype=np.float64)
+        probe = np.vstack([base, base])
+        probe[1, axis] += 1.0
+        xy, valid = self.project_to_canvas(probe)
+        if not bool(np.all(valid)):
+            return None
+        return xy[1] - xy[0]
+
+    # -- cross-section slab ---------------------------------------------
+    def set_slab(self, lo, hi, color=(1.0, 0.62, 0.1, 0.95)) -> None:
+        """Draw the box with corners ``lo`` and ``hi`` (world XYZ)."""
+        lo = np.asarray(lo, dtype=np.float32)
+        hi = np.asarray(hi, dtype=np.float32)
+        corners = np.array(
+            [[(hi if i & (1 << b) else lo)[b] for b in range(3)]
+             for i in range(8)], dtype=np.float32,
+        )
+        segments = []
+        for i in range(8):
+            for b in range(3):
+                if not i & (1 << b):
+                    segments.append(corners[i])
+                    segments.append(corners[i | (1 << b)])
+        pos = np.asarray(segments, dtype=np.float32)
+        self.slab.set_data(
+            pos=pos, color=np.tile(np.asarray(color, np.float32), (len(pos), 1))
+        )
+        self.slab.visible = True
+        self.canvas.update()
+
+    def clear_slab(self) -> None:
+        if self.slab.visible:
+            self.slab.visible = False
+            self.canvas.update()
 
     #: How far a press may travel and still be a click rather than a drag.
     CLICK_TOLERANCE_PX = 4.0

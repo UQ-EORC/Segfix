@@ -68,6 +68,7 @@ from .cloudview import INSIDE_FOV
 from .icons import icon
 from .lasso import ClusterTool, LassoTool
 from .model import NOISE, UNASSIGNED, PointCloud
+from .overlays import SlabHandles
 from .viewer import (
     busy,
     class_colors,
@@ -813,7 +814,9 @@ class SegFixWidget(QWidget):
         self.cross_enable = QCheckBox("On")
         self.cross_enable.setToolTip(
             "Slice the cloud to a slab along one axis. While on, only points "
-            "inside the slab are shown or selectable."
+            "inside the slab are shown or selectable. Drag the arrows on the "
+            "slab's faces to move them, or the square to slide it; Ctrl+wheel "
+            "slides it a step, Ctrl+Shift+wheel changes its thickness."
         )
         self.cross_enable.toggled.connect(self._on_cross_section_toggled)
         cross.addWidget(self.cross_enable)
@@ -855,6 +858,15 @@ class SegFixWidget(QWidget):
         top_bar_row.addWidget(self.cross_box)
         self._cross_lo, self._cross_hi = 0.0, 1.0
         self._reset_cross_section_range()
+        # The slab itself, drawn as a box with grips on it, and the wheel
+        # that nudges it: the slider popover is for setting it up, these
+        # are for adjusting it while selecting.
+        self._slab_handles = SlabHandles(
+            self.c.view, self._on_slab_press, self._on_slab_drag,
+            self._on_slab_release,
+        )
+        self._slab_at_press: tuple[float, float] | None = None
+        self.c.view.on_slab_wheel = self._on_slab_wheel
 
         # -- lasso section: same idea as cross section, but the kept
         # region is a hand-drawn outline instead of an axis-aligned slab.
@@ -2316,18 +2328,22 @@ class SegFixWidget(QWidget):
 
     def _on_cross_section_toggled(self, checked: bool) -> None:
         self._apply_visibility()
+        self._draw_slab()
         self.c.view.status = (
-            "Cross section on - only the slab is shown/selectable"
+            "Cross section on - drag the slab's arrows, or Ctrl+wheel, to "
+            "move it; only the slab is shown/selectable"
             if checked else "Cross section off"
         )
 
     def _on_cross_axis_changed(self, _index: int) -> None:
         self._reset_cross_section_range()
         self._apply_visibility()
+        self._draw_slab()
 
     def _on_cross_reset(self) -> None:
         self._reset_cross_section_range()
         self._apply_visibility()
+        self._draw_slab()
 
     def _on_cross_range_changed(self, _value: int) -> None:
         # Keep min <= max by nudging the other slider if a drag crosses it;
@@ -2340,6 +2356,119 @@ class SegFixWidget(QWidget):
             return
         self._update_cross_range_label()
         self._apply_visibility()
+        self._draw_slab()
+
+    # -- the slab on the canvas: a box, grips, and the wheel ----------------
+    #: One wheel notch moves the slab this fraction of its thickness, or
+    #: changes the thickness by it. Relative, so a 10 cm slab creeps and a
+    #: 5 m one strides.
+    SLAB_WHEEL_FRACTION = 0.05
+    #: Thinner than this and there is nothing left to select.
+    SLAB_MIN_THICKNESS = 0.02
+
+    def slab_range(self) -> tuple[float, float]:
+        """The slab's ``(lo, hi)`` along its axis, in metres."""
+        return (self._slider_to_value(self.cross_min_slider.value()),
+                self._slider_to_value(self.cross_max_slider.value()))
+
+    def set_slab_range(self, lo: float, hi: float) -> None:
+        """Move the slab to ``lo..hi``, clamped to the cloud's extent and
+        never thinner than :data:`SLAB_MIN_THICKNESS`. The sliders stay the
+        one source of truth, so the popover always agrees with the box."""
+        bound_lo, bound_hi = self._cross_lo, self._cross_hi
+        lo = min(max(lo, bound_lo), bound_hi)
+        hi = min(max(hi, bound_lo), bound_hi)
+        if hi - lo < self.SLAB_MIN_THICKNESS:
+            mid = (lo + hi) / 2
+            lo = max(bound_lo, mid - self.SLAB_MIN_THICKNESS / 2)
+            hi = min(bound_hi, lo + self.SLAB_MIN_THICKNESS)
+        span = bound_hi - bound_lo
+        steps = self.CROSS_SECTION_STEPS
+        values = (
+            int(round((lo - bound_lo) / span * steps)),
+            int(round((hi - bound_lo) / span * steps)),
+        )
+        for slider, value in zip((self.cross_min_slider, self.cross_max_slider),
+                                 values):
+            slider.blockSignals(True)
+            slider.setValue(value)
+            slider.blockSignals(False)
+        self._update_cross_range_label()
+        self._apply_visibility()
+        self._draw_slab()
+
+    def _draw_slab(self) -> None:
+        """Show the slab as a box through the loaded cloud, with its grips,
+        or take both away when the section is off."""
+        view = self.c.view
+        coords = self.c.cloud.coords
+        if not self.cross_enable.isChecked() or not len(coords):
+            view.clear_slab()
+            self._slab_handles.hide()
+            return
+        axis = self.cross_axis_combo.currentIndex()
+        lo, hi = self.slab_range()
+        box_lo = coords.min(axis=0).astype(np.float64)
+        box_hi = coords.max(axis=0).astype(np.float64)
+        # A little past the points across the slab, so the box reads as a
+        # cut through the cloud rather than a tree's own outline.
+        pad = 0.02 * (box_hi - box_lo)
+        box_lo, box_hi = box_lo - pad, box_hi + pad
+        box_lo[axis], box_hi[axis] = lo, hi
+        view.set_slab(box_lo, box_hi)
+        mid = (box_lo + box_hi) / 2
+        lo_face, hi_face = mid.copy(), mid.copy()
+        lo_face[axis], hi_face[axis] = lo, hi
+        self._slab_handles.show(lo_face, hi_face, mid, axis)
+
+    def _slab_status(self) -> None:
+        axis_name = "XYZ"[self.cross_axis_combo.currentIndex()]
+        lo, hi = self.slab_range()
+        self.c.view.status = (
+            f"Slab {axis_name} {lo:.2f} to {hi:.2f} m ({hi - lo:.2f} m thick)"
+        )
+
+    def _on_slab_wheel(self, step: int, resize: bool) -> None:
+        """Ctrl+wheel: slide the slab along its axis; with Shift, thicken or
+        thin it about its middle. Works whatever tool is armed."""
+        if not self.cross_enable.isChecked():
+            self.c.view.status = "Turn Cross section on (C) to nudge the slab"
+            return
+        lo, hi = self.slab_range()
+        amount = max(self.SLAB_MIN_THICKNESS, (hi - lo) * self.SLAB_WHEEL_FRACTION)
+        amount *= step
+        if resize:
+            lo, hi = lo - amount, hi + amount
+        else:
+            # Slide without squashing: stop at the cloud's edge rather than
+            # thinning the slab against it.
+            room = (self._cross_hi - hi) if amount > 0 else (lo - self._cross_lo)
+            amount = min(amount, room) if amount > 0 else max(amount, -room)
+            lo, hi = lo + amount, hi + amount
+        self.set_slab_range(lo, hi)
+        self._slab_status()
+
+    def _on_slab_press(self) -> None:
+        self._slab_at_press = self.slab_range()
+
+    def _on_slab_drag(self, kind: str, metres: float) -> None:
+        """A grip dragged ``metres`` along the axis since the press."""
+        if self._slab_at_press is None:
+            return
+        lo, hi = self._slab_at_press
+        if kind == "lo":
+            lo = min(lo + metres, hi - self.SLAB_MIN_THICKNESS)
+        elif kind == "hi":
+            hi = max(hi + metres, lo + self.SLAB_MIN_THICKNESS)
+        else:
+            thickness = hi - lo
+            lo = min(max(lo + metres, self._cross_lo), self._cross_hi - thickness)
+            hi = lo + thickness
+        self.set_slab_range(lo, hi)
+
+    def _on_slab_release(self) -> None:
+        self._slab_at_press = None
+        self._slab_status()
 
     def _update_cross_range_label(self) -> None:
         axis_name = "XYZ"[self.cross_axis_combo.currentIndex()]

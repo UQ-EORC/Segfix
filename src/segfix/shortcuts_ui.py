@@ -100,6 +100,10 @@ MOUSE_HELP: tuple[tuple[str, str], ...] = (
                              "there while inside the cloud"),
     ("Ctrl+click a point", "Make that point's tree the current tree"),
     ("Shift while selecting", "Add to the selection instead of replacing it"),
+    ("Ctrl+wheel", "Slide the cross-section slab along its axis"),
+    ("Ctrl+Shift+wheel", "Thicken or thin the cross-section slab"),
+    ("Drag the slab's arrows", "Move one face of the slab; the square "
+                               "slides the whole slab"),
 )
 
 
