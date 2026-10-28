@@ -7,6 +7,32 @@ segmented LiDAR cloud, see each tree in its own colour, and correct mistakes by
 lassoing points and reassigning, splitting off, or dismissing them, then save
 back to a corrected version of the input, retaining all fields.
 
+## Citation
+
+If Segfix contributed to your work, please cite it. Each release is archived
+on Zenodo, which gives it a DOI: https://doi.org/10.5281/zenodo.23717302
+always resolves to the latest version, and each version has its own.
+
+> Devereux, T., Rivory, J., Woodgate, W., Aryal, R. R., Eaton, G. and
+> Phinn, S. (2026). *Segfix: interactive correction of tree instance
+> segmentation in forest point clouds* (version 1.2.2) [Computer software].
+> The University of Queensland. https://doi.org/10.5281/zenodo.23717303
+
+```bibtex
+@software{segfix,
+  author       = {Devereux, Tim and Rivory, Josh and Woodgate, Will and
+                  Aryal, Raja Ram and Eaton, Glen and Phinn, Stuart},
+  title        = {Segfix: interactive correction of tree instance
+                  segmentation in forest point clouds},
+  year         = {2026},
+  version      = {1.2.2},
+  organization = {The University of Queensland},
+  doi          = {10.5281/zenodo.23717303},
+  url          = {https://github.com/UQ-EORC/Segfix}
+}
+```
+
+
 ## Walkthrough video
 
 A 17-minute captioned tour of every tool, fixing every tree in the example
@@ -578,41 +604,4 @@ point of the same tree *and* class.
 
 ```bash
 pytest        # core model, operations, and IO round-trip (no GUI needed)
-```
-
-## Authors
-
-- Tim Devereux, The University of Queensland
-- Josh Rivory, The University of Queensland
-- Will Woodgate, The University of Queensland
-- Raja Ram Aryal, The University of Queensland
-- Glen Eaton, The University of Queensland
-- Stuart Phinn, The University of Queensland
-
-Development of this software was made possible by funding from The Terrestrial
-Ecosystem Research Network (TERN).
-
-## Citation
-
-If Segfix contributed to your work, please cite it. Each release is archived
-on Zenodo, which gives it a DOI: https://doi.org/10.5281/zenodo.23717302
-always resolves to the latest version, and each version has its own.
-
-> Devereux, T., Rivory, J., Woodgate, W., Aryal, R. R., Eaton, G. and
-> Phinn, S. (2026). *Segfix: interactive correction of tree instance
-> segmentation in forest point clouds* (version 1.2.2) [Computer software].
-> The University of Queensland. https://doi.org/10.5281/zenodo.23717303
-
-```bibtex
-@software{segfix,
-  author       = {Devereux, Tim and Rivory, Josh and Woodgate, Will and
-                  Aryal, Raja Ram and Eaton, Glen and Phinn, Stuart},
-  title        = {Segfix: interactive correction of tree instance
-                  segmentation in forest point clouds},
-  year         = {2026},
-  version      = {1.2.2},
-  organization = {The University of Queensland},
-  doi          = {10.5281/zenodo.23717303},
-  url          = {https://github.com/UQ-EORC/Segfix}
-}
 ```
