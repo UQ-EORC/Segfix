@@ -1,0 +1,56 @@
+{
+  "upload_type": "software",
+  "title": "Segfix: interactive correction of tree instance segmentation in forest point clouds",
+  "creators": [
+    {
+      "name": "Devereux, Tim",
+      "affiliation": "The University of Queensland"
+    },
+    {
+      "name": "Rivory, Josh",
+      "affiliation": "The University of Queensland"
+    },
+    {
+      "name": "Woodgate, Will",
+      "affiliation": "The University of Queensland"
+    },
+    {
+      "name": "Aryal, Raja Ram",
+      "affiliation": "The University of Queensland"
+    },
+    {
+      "name": "Eaton, Glen",
+      "affiliation": "The University of Queensland"
+    },
+    {
+      "name": "Phinn, Stuart",
+      "affiliation": "The University of Queensland"
+    }
+  ],
+  "description": "<p>Segfix is an open-source desktop application for finding and fixing errors in automatic instance segmentation of terrestrial and mobile laser scans into individual trees: crowns split across two IDs, two stems merged into one, branches handed to the wrong neighbour, ground swallowed into a trunk, and bushes detected as trees. It opens a segmented plot of hundreds of millions of points through a memory map, loads one tree with its spatial neighbours at a time, and offers a review loop in which every edit is a lasso or a click followed by one key. Saving patches only the label bytes that changed, so the file keeps its format, fields and coordinates byte for byte. Segfix also edits per-point classes such as leaf and wood, imports one-file-per-tree outputs, and matches the segmented trees to a field stem map on position, height and a fitted diameter at breast height. It reads the outputs of Sylva, raycloudtools and arbor directly.</p><p>Install with <code>pip install segfix</code> on Linux, Windows and macOS; a standalone Windows installer and portable zip are on the GitHub releases page.</p>",
+  "license": "GPL-3.0-or-later",
+  "access_right": "open",
+  "language": "eng",
+  "keywords": [
+    "LiDAR",
+    "terrestrial laser scanning",
+    "tree segmentation",
+    "point cloud annotation",
+    "forest inventory",
+    "interactive editing"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/UQ-EORC/Segfix",
+      "relation": "isSupplementTo",
+      "resource_type": "software",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://pypi.org/project/segfix/",
+      "relation": "isIdenticalTo",
+      "resource_type": "software",
+      "scheme": "url"
+    }
+  ]
+}

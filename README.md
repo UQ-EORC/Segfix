@@ -14,7 +14,7 @@ plot from `scripts/make_sample.py`: large coordinates and dense clouds, the
 editing loop, leaf and wood classes, and matching a field stem map. Click to
 watch:
 
-[![Watch the segfix walkthrough](https://raw.githubusercontent.com/UQ-EORC/Segfix/main/docs/walkthrough-thumbnail.png)](https://github.com/UQ-EORC/Segfix/releases/download/v1.2.1/segfix_walkthrough.mp4)
+[![Watch the segfix walkthrough](https://raw.githubusercontent.com/UQ-EORC/Segfix/main/docs/walkthrough-thumbnail.png)](https://github.com/UQ-EORC/Segfix/releases/download/v1.2.2/segfix_walkthrough.mp4)
 
 Testing is done on Fedora Linux 44, Windows 11 and macOS.
 
@@ -584,25 +584,32 @@ pytest        # core model, operations, and IO round-trip (no GUI needed)
 
 - Tim Devereux, The University of Queensland
 - Josh Rivory, The University of Queensland
+- Will Woodgate, The University of Queensland
+- Raja Ram Aryal, The University of Queensland
+- Glen Eaton, The University of Queensland
+- Stuart Phinn, The University of Queensland
 
 Development of this software was made possible by funding from The Terrestrial
 Ecosystem Research Network (TERN).
 
 ## Citation
 
-If Segfix contributed to your work, please cite it:
+If Segfix contributed to your work, please cite it. Each release is archived
+on Zenodo, which gives it a DOI; cite the version you used.
 
-> Devereux, T. and Rivory, J. (2026). *Segfix: a GUI tool to fix the instance
-> segmentation of tree point clouds* (version 1.2.1) [Computer software].
+> Devereux, T., Rivory, J., Woodgate, W., Aryal, R. R., Eaton, G. and
+> Phinn, S. (2026). *Segfix: interactive correction of tree instance
+> segmentation in forest point clouds* (version 1.2.2) [Computer software].
 > The University of Queensland. https://github.com/UQ-EORC/Segfix
 
 ```bibtex
 @software{segfix,
-  author       = {Devereux, Tim and Rivory, Josh},
-  title        = {Segfix: a GUI tool to fix the instance segmentation of
-                  tree point clouds},
+  author       = {Devereux, Tim and Rivory, Josh and Woodgate, Will and
+                  Aryal, Raja Ram and Eaton, Glen and Phinn, Stuart},
+  title        = {Segfix: interactive correction of tree instance
+                  segmentation in forest point clouds},
   year         = {2026},
-  version      = {1.2.1},
+  version      = {1.2.2},
   organization = {The University of Queensland},
   url          = {https://github.com/UQ-EORC/Segfix}
 }

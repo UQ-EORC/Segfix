@@ -1,15 +1,38 @@
-# GitHub reads this file for the repository's "Cite this repository" button.
+# GitHub reads this file for the repository's "Cite this repository" button,
+# and Zenodo takes the archive's metadata from .zenodo.json beside it.
 cff-version: 1.2.0
-title: "Segfix: a GUI tool to fix the instance segmentation of tree point clouds"
+title: "Segfix: interactive correction of tree instance segmentation in forest point clouds"
 message: "If Segfix contributed to your work, please cite it."
 type: software
 authors:
   - given-names: Tim
     family-names: Devereux
     affiliation: The University of Queensland
-    email: devereux.tj@gmail.com
+    email: t.devereux@uq.edu.au
+  - given-names: Josh
+    family-names: Rivory
+    affiliation: The University of Queensland
+  - given-names: Will
+    family-names: Woodgate
+    affiliation: The University of Queensland
+  - given-names: Raja Ram
+    family-names: Aryal
+    affiliation: The University of Queensland
+  - given-names: Glen
+    family-names: Eaton
+    affiliation: The University of Queensland
+  - given-names: Stuart
+    family-names: Phinn
+    affiliation: The University of Queensland
 repository-code: "https://github.com/UQ-EORC/Segfix"
 url: "https://pypi.org/project/segfix/"
 license: GPL-3.0-or-later
-version: 1.2.1
-date-released: "2026-10-10"
+keywords:
+  - LiDAR
+  - terrestrial laser scanning
+  - tree segmentation
+  - point cloud annotation
+  - forest inventory
+  - interactive editing
+version: 1.2.2
+date-released: "2026-10-28"
