@@ -24,6 +24,14 @@ authors:
   - given-names: Stuart
     family-names: Phinn
     affiliation: The University of Queensland
+doi: 10.5281/zenodo.23717303
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23717302
+    description: The concept DOI, resolving to the latest version
+  - type: doi
+    value: 10.5281/zenodo.23717303
+    description: Version 1.2.2
 repository-code: "https://github.com/UQ-EORC/Segfix"
 url: "https://pypi.org/project/segfix/"
 license: GPL-3.0-or-later

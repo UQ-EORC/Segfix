@@ -1,6 +1,6 @@
 # Segfix
 
-[![PyPI](https://img.shields.io/pypi/v/segfix)](https://pypi.org/project/segfix/)
+[![PyPI](https://img.shields.io/pypi/v/segfix)](https://pypi.org/project/segfix/) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23717302.svg)](https://doi.org/10.5281/zenodo.23717302)
 
 A GUI tool to **fix the instance segmentation of tree point clouds**. Load a
 segmented LiDAR cloud, see each tree in its own colour, and correct mistakes by
@@ -595,12 +595,13 @@ Ecosystem Research Network (TERN).
 ## Citation
 
 If Segfix contributed to your work, please cite it. Each release is archived
-on Zenodo, which gives it a DOI; cite the version you used.
+on Zenodo, which gives it a DOI: https://doi.org/10.5281/zenodo.23717302
+always resolves to the latest version, and each version has its own.
 
 > Devereux, T., Rivory, J., Woodgate, W., Aryal, R. R., Eaton, G. and
 > Phinn, S. (2026). *Segfix: interactive correction of tree instance
 > segmentation in forest point clouds* (version 1.2.2) [Computer software].
-> The University of Queensland. https://github.com/UQ-EORC/Segfix
+> The University of Queensland. https://doi.org/10.5281/zenodo.23717303
 
 ```bibtex
 @software{segfix,
@@ -611,6 +612,7 @@ on Zenodo, which gives it a DOI; cite the version you used.
   year         = {2026},
   version      = {1.2.2},
   organization = {The University of Queensland},
+  doi          = {10.5281/zenodo.23717303},
   url          = {https://github.com/UQ-EORC/Segfix}
 }
 ```
