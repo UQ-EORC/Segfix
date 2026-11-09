@@ -128,6 +128,15 @@ overflow a signed 32-bit int, both of which some pipelines use as a "no tree"
 sentinel, are folded into *unassigned* on load, so they don't show up as
 spurious trees.
 
+### Test tile
+
+To try Segfix on real data, [`data/litchfield_tile/`](data/litchfield_tile/)
+has a 15 × 15 m tile from the TERN Litchfield savanna plot: 52 trees
+segmented by raycloudtools and not yet corrected, with the 28 field stems
+inside it. Open `litchfield_tile.laz` with **New Project…**, then load
+`litchfield_tile_stems.csv` with **Inventory ▸ Load Stem Map…**. See its
+[README](data/litchfield_tile/README.md) for details.
+
 ### Accepted formats
 
 **Binary PLY**, RGB-segmented (raycloudtools) or with a label field, and
