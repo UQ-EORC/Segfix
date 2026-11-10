@@ -352,6 +352,16 @@ def visibility_mask(labels: np.ndarray, hide_unassigned=False,
     return shown
 
 
+def batched(view):
+    """``with batched(view):`` -- everything inside redraws the cloud once,
+    at the end (see :meth:`segfix.cloudview.CloudView.batch`). A view with
+    no such thing, as the stand-ins in the tests are, just runs the block."""
+    from contextlib import nullcontext
+
+    batch = getattr(view, "batch", None)
+    return batch() if batch is not None else nullcontext()
+
+
 def refresh_view(view, cloud: PointCloud, faded=None, changed=None,
                  class_colours=None) -> None:
     """Re-apply point colours to ``view`` after the labels have changed.

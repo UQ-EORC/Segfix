@@ -168,6 +168,72 @@ def load(path: str, label_field: str | None = None) -> PointCloud:
     return _load_ply(path, label_field)
 
 
+#: Points decoded at a time by :func:`labels_from_rgb`, and the size from
+#: which its lookup table beats a sort. The table is 80MB whatever the
+#: cloud, so below a million points the sort is both quicker and smaller.
+_RGB_CHUNK = 4_000_000
+_RGB_TABLE_ABOVE = 1_000_000
+
+
+def _pack_rgb(red, green, blue) -> np.ndarray:
+    """``red << 16 | green << 8 | blue`` as uint32, built in place so the
+    only array the size of the input is the answer."""
+    packed = np.asarray(red).astype(np.uint32)
+    packed <<= 8
+    packed |= np.asarray(green)
+    packed <<= 8
+    packed |= np.asarray(blue)
+    return packed
+
+
+def labels_from_rgb(red, green, blue):
+    """``(labels int32, {label: (r, g, b)})`` for per-point colour columns.
+
+    Each distinct colour is a tree, numbered from 1 in order of its packed
+    ``r << 16 | g << 8 | b`` value; pure black is :data:`UNASSIGNED` and
+    takes a number (if present) without getting a colour.
+
+    ``np.unique(packed, return_inverse=True)`` says the same thing by
+    sorting every point, which was 2.1s of a 5s open on a 39M-point plot.
+    A colour is 24 bits, so there are only 16.7M possible values: marking
+    which occur in a table that size and reading each point's rank back out
+    of it is two linear passes (0.5s on that plot) and never holds more
+    than a chunk's worth of packed colours, where the sort needed an int64
+    permutation of the whole cloud. The columns are read a chunk at a time,
+    so they can be memory-mapped fields.
+    """
+    n = len(red)
+    if n < _RGB_TABLE_ABOVE:
+        packed = _pack_rgb(red, green, blue)
+        uniq, inverse = np.unique(packed, return_inverse=True)
+        labels = (inverse + 1).astype(np.int32)
+        labels[packed == 0] = UNASSIGNED  # black = unsegmented
+    else:
+        present = np.zeros(1 << 24, dtype=bool)
+        for start in range(0, n, _RGB_CHUNK):
+            stop = start + _RGB_CHUNK
+            present[_pack_rgb(red[start:stop], green[start:stop],
+                              blue[start:stop])] = True
+        uniq = np.flatnonzero(present)
+        # rank[colour] is the colour's position among those present, plus
+        # one: exactly `inverse + 1` above.
+        rank = np.cumsum(present, dtype=np.int32)
+        del present
+        rank[0] = UNASSIGNED
+        labels = np.empty(n, dtype=np.int32)
+        for start in range(0, n, _RGB_CHUNK):
+            stop = start + _RGB_CHUNK
+            labels[start:stop] = rank[_pack_rgb(
+                red[start:stop], green[start:stop], blue[start:stop]
+            )]
+    label_colors = {
+        k + 1: ((u >> 16) & 255, (u >> 8) & 255, u & 255)
+        for k, u in enumerate(uniq.tolist())
+        if u != 0
+    }
+    return labels, label_colors
+
+
 def load_rgb_segmented(path: str) -> PointCloud:
     """Load a binary PLY whose tree segmentation is encoded as per-point RGB.
 
@@ -191,19 +257,9 @@ def load_rgb_segmented(path: str) -> PointCloud:
         data[names["x"]], data[names["y"]], data[names["z"]]
     ]).astype(np.float32)
 
-    r = data[names["red"]].astype(np.uint32)
-    g = data[names["green"]].astype(np.uint32)
-    b = data[names["blue"]].astype(np.uint32)
-    packed = (r << 16) | (g << 8) | b
-    uniq, inverse = np.unique(packed, return_inverse=True)
-
-    labels = (inverse + 1).astype(np.int32)
-    labels[packed == 0] = UNASSIGNED  # black = unsegmented
-    label_colors = {
-        int(k + 1): (int((u >> 16) & 255), int((u >> 8) & 255), int(u & 255))
-        for k, u in enumerate(uniq)
-        if u != 0
-    }
+    labels, label_colors = labels_from_rgb(
+        data[names["red"]], data[names["green"]], data[names["blue"]]
+    )
 
     # Keep remaining columns so we can round-trip the raycloud format on save.
     keep = {names.get(n) for n in ("x", "y", "z", "red", "green", "blue")}

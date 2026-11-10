@@ -84,6 +84,51 @@ def _median_nn(points: np.ndarray, rng, cap: int = _QUERY_CAP) -> float:
     return float(np.median(d[:, 1]))
 
 
+#: From this many points up, :func:`in_box` splits the cloud into chunks
+#: and tests them on a few threads. Below it the whole test is a couple of
+#: milliseconds and a thread hand-off would only add to it. Half a million
+#: rather than a plot's worth, because the review panel asks about the
+#: loaded scene after every edit, and a scene is about a million points.
+_PARALLEL_ABOVE = 500_000
+#: Points per chunk: a couple of chunks per thread, within these bounds.
+_PARALLEL_CHUNK = (250_000, 2_000_000)
+#: More threads than this stop paying: the test is memory-bound, and eight
+#: already took 186ms to 67ms on a 39M-point plot.
+_MAX_WORKERS = 8
+
+_pool = None
+
+
+def _workers() -> int:
+    import os
+
+    return max(1, min(_MAX_WORKERS, os.cpu_count() or 1))
+
+
+def _thread_pool():
+    """The shared worker threads, started on first use."""
+    global _pool
+    if _pool is None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        _pool = ThreadPoolExecutor(
+            max_workers=_workers(), thread_name_prefix="segfix-box"
+        )
+    return _pool
+
+
+def _in_box_into(coords: np.ndarray, lo, hi, mask: np.ndarray) -> None:
+    """:func:`in_box` for one run of points, written into ``mask``."""
+    tmp = np.empty(len(coords), dtype=bool)
+    mask[:] = True
+    for axis in range(3):
+        column = coords[:, axis]
+        np.greater_equal(column, lo[axis], out=tmp)
+        mask &= tmp
+        np.less_equal(column, hi[axis], out=tmp)
+        mask &= tmp
+
+
 def in_box(coords: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
     """Boolean mask of points inside an axis-aligned box, tested axis by axis
     so a huge cloud never materialises two full ``(N, 3)`` temporaries.
@@ -94,16 +139,28 @@ def in_box(coords: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
     allocate/free round trip costs roughly fifty times more on Windows (fresh
     pages committed through VirtualAlloc, kernel-zeroed) than on Linux, where
     glibc hands the same warm arena back.
+
+    A cloud of :data:`_PARALLEL_ABOVE` points or more is tested a chunk per
+    thread. The comparisons release the GIL, each chunk writes its own
+    stretch of the one result mask, and this runs over the whole catalogue
+    every time a tree is opened -- 186ms a call on a 39M-point plot, 67ms
+    threaded, for the same mask.
     """
     n = len(coords)
-    mask = np.ones(n, dtype=bool)
-    tmp = np.empty(n, dtype=bool)
-    for axis in range(3):
-        column = coords[:, axis]
-        np.greater_equal(column, lo[axis], out=tmp)
-        mask &= tmp
-        np.less_equal(column, hi[axis], out=tmp)
-        mask &= tmp
+    mask = np.empty(n, dtype=bool)
+    if n < _PARALLEL_ABOVE or _workers() < 2:
+        _in_box_into(coords, lo, hi, mask)
+        return mask
+
+    smallest, largest = _PARALLEL_CHUNK
+    chunk = max(smallest, min(largest, n // (2 * _workers())))
+
+    def work(start: int) -> None:
+        stop = start + chunk
+        _in_box_into(coords[start:stop], lo, hi, mask[start:stop])
+
+    # list(): drain the iterator, so an exception in a worker is raised here.
+    list(_thread_pool().map(work, range(0, n, chunk)))
     return mask
 
 

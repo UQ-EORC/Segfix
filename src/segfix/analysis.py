@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .model import NOISE, UNASSIGNED, PointCloud
+from .model import NOISE, UNASSIGNED, PointCloud, label_counts
 
 _SAMPLE_CAP = 3000
 
@@ -215,9 +215,6 @@ def neighbour_distances(
     tree — the one whose crown the selection probably belongs to — is the
     first button, and the first number key.
     """
-    from scipy.spatial import cKDTree
-
-    rng = rng or np.random.default_rng(0)
     labels, coords = cloud.labels, cloud.coords
     mine = np.flatnonzero(labels == tid)
     if mine.size == 0:
@@ -226,8 +223,7 @@ def neighbour_distances(
     hi = coords[mine].max(axis=0) + reach
     # density.in_box rather than the chained expression this used to spell
     # out: same per-axis test, but into two reused buffers instead of eleven
-    # (N,) temporaries, which matters because this runs over the whole
-    # catalogue every time a tree is opened.
+    # (N,) temporaries.
     from .density import in_box as _in_box
 
     in_box = _in_box(coords, lo, hi)
@@ -236,20 +232,48 @@ def neighbour_distances(
     # loop no longer rescans all N labels once per candidate.
     box_idx = np.flatnonzero(in_box)
     box_labels = labels[box_idx]
-    cand = np.unique(box_labels)
+    cand = _distinct_labels(box_labels)
     cand = cand[(cand != UNASSIGNED) & (cand != NOISE) & (cand != tid)]
-    if not cand.size:
-        return {}
-    kd = cKDTree(coords[_sample(rng, mine)])
+    return sampled_distances(
+        coords, mine,
+        ((int(t), box_idx[box_labels == t]) for t in cand),
+        reach, rng,
+    )
+
+
+def sampled_distances(
+    coords: np.ndarray, mine: np.ndarray, candidates, reach: float, rng=None
+) -> dict[int, float]:
+    """``{tree id: closest sampled distance}`` from the points ``mine`` to
+    each of ``candidates``, keeping those that come within ``reach``.
+
+    ``candidates`` yields ``(tree id, indices of its points near mine)`` in
+    ascending id order. Split out of :func:`neighbour_distances` so the
+    catalogue can hand over candidates it found from its own index (see
+    :meth:`segfix.treecatalog._BaseCatalog.neighbours`) and still get the
+    very same answer: the samples are drawn in the same order from the same
+    generator either way.
+    """
+    from scipy.spatial import cKDTree
+
+    rng = rng or np.random.default_rng(0)
+    kd = None
     out: dict[int, float] = {}
-    for t in cand:
-        theirs = box_idx[box_labels == t]
+    for t, theirs in candidates:
+        if kd is None:
+            # Sampled before any candidate is, as it always was.
+            kd = cKDTree(coords[_sample(rng, mine)])
         d, _ = kd.query(
             coords[_sample(rng, theirs)], k=1, distance_upper_bound=reach
         )
         if np.isfinite(d).any():
             out[int(t)] = float(np.min(d[np.isfinite(d)]))
     return out
+
+
+def _distinct_labels(labels: np.ndarray) -> np.ndarray:
+    """``np.unique(labels)``, see :func:`segfix.model.label_counts`."""
+    return label_counts(labels)[0]
 
 
 # -- stem measurements -------------------------------------------------------

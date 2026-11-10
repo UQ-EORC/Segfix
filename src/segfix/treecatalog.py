@@ -71,6 +71,12 @@ GLOBAL_SHIFT_THRESHOLD = 1.0e4
 #: hundred MB however many points the cloud has.
 _CHUNK = 4_000_000
 
+#: The per-tree index copies an edit leaves behind (see
+#: :meth:`_BaseCatalog._update_index`) are tidied away once they hold a
+#: quarter of the cloud, but never for less than this many points: below it
+#: they are a few megabytes and the rebuild would cost more than they do.
+_COMPACT_FLOOR = 1_000_000
+
 #: ``(mins, maxs, suggested_shift) -> (dx, dy, dz) | None`` — ``None`` means
 #: "load unshifted". Wired to a Qt dialog by the app; ``None`` (the default)
 #: skips the prompt entirely and never shifts, which is what every existing
@@ -579,14 +585,20 @@ class _BaseCatalog:
             out = np.empty((self.count, 3), dtype=np.float32)
         mins = np.full(3, np.inf)
         maxs = np.full(3, -np.inf)
+        # One axis at a time, each a contiguous float64 column: stacking the
+        # three into an (n, 3) block first and reducing that along its short
+        # axis was 1.6s of a 5s open on a 39M-point plot, against 0.44s for
+        # the same numbers taken a column at a time.
         for start in range(0, self.count, _CHUNK):
             stop = min(start + _CHUNK, self.count)
-            block = self._decode_coords_raw(self._mm[start:stop])
-            np.minimum(mins, block.min(axis=0), out=mins)
-            np.maximum(maxs, block.max(axis=0), out=maxs)
-            if shift is not None:
-                block += shift
-            out[start:stop] = block
+            sub = self._mm[start:stop]
+            for axis in range(3):
+                column = self._decode_axis_raw(sub, axis)
+                mins[axis] = np.minimum(mins[axis], column.min())
+                maxs[axis] = np.maximum(maxs[axis], column.max())
+                if shift is not None:
+                    column += shift[axis]
+                out[start:stop, axis] = column
         return out, (mins, maxs)
 
     def _read_labels(self):
@@ -691,9 +703,16 @@ class _BaseCatalog:
     def _open(self) -> None:  # pragma: no cover - abstract
         raise NotImplementedError
 
-    def _decode_coords_raw(self, sub) -> np.ndarray:  # pragma: no cover - abstract
-        """Full-precision (float64) coordinates, before any global shift."""
+    def _decode_axis_raw(self, sub, axis: int) -> np.ndarray:  # pragma: no cover - abstract
+        """One axis (0, 1, 2 for x, y, z) of ``sub`` at full precision: a
+        fresh, contiguous float64 array, before any global shift."""
         raise NotImplementedError
+
+    def _decode_coords_raw(self, sub) -> np.ndarray:
+        """Full-precision (float64) coordinates, before any global shift."""
+        return np.column_stack(
+            [self._decode_axis_raw(sub, axis) for axis in range(3)]
+        )
 
     def _decode_coords(self, sub) -> np.ndarray:
         """Shifted, float32 coordinates for a subset — used by :meth:`load`,
@@ -730,8 +749,10 @@ class _BaseCatalog:
         """
         return np.asarray(sub[self.label_field]).astype(np.int64)
 
-    def _finalize_save(self, target: str, is_new_target: bool) -> None:
-        """Hook after the in-place patch is flushed (e.g. re-export LAZ)."""
+    def _finalize_save(self, target: str, is_new_target: bool,
+                       progress: ProgressFn | None = None) -> None:
+        """Hook after the in-place patch is flushed (e.g. re-export LAZ).
+        ``progress`` gets the bar from :data:`_SAVE_FINALIZE_AT` to the end."""
 
     # -- export ------------------------------------------------------------
     def file_labels(self) -> np.ndarray:
@@ -766,10 +787,19 @@ class _BaseCatalog:
     def _build_index(self) -> None:
         """Sort-by-label once so any tree's point indices are an O(1) slice.
 
-        Rebuilt (O(N log N)) after every :meth:`apply` — that's only on a
-        tree switch or Save, never per-render, so it's not on the hot path
-        that made loading the whole cloud slow.
+        O(N log N) over the whole cloud, so it is done on open and only
+        rarely after: :meth:`apply` brings the index up to date for the
+        trees an edit touched (see :meth:`_update_index`) and comes back
+        here just to tidy up once those have piled up.
         """
+        # Labels whose points are no longer where `order` has them, as
+        # {label: its points now} -- see _update_index.
+        self._moved: dict[int, np.ndarray] = {}
+        self._moved_points = 0
+        # Unassigned and noise, once an edit has touched them: found by a
+        # scan when somebody asks, which nothing on the editing path does.
+        self._stale: set[int] = set()
+        self._boxes = None
         self.order = _label_order(self.labels)
         sorted_labels = self.labels[self.order]
         # Run starts, not np.unique: `sorted_labels` is sorted by
@@ -817,24 +847,136 @@ class _BaseCatalog:
             )
 
     def indices_for(self, label: int) -> np.ndarray:
+        """The working-set positions of ``label``'s points, ascending."""
+        label = int(label)
+        moved = self._moved.get(label)
+        if moved is not None:
+            return moved
+        if label in self._stale:
+            return np.flatnonzero(self.labels == label)
         start = self._starts.get(label)
         if start is None:
             return np.empty(0, dtype=np.int64)
         return self.order[start:start + self._counts[label]]
 
+    def _update_index(self, global_idx: np.ndarray, old: np.ndarray,
+                      new: np.ndarray) -> None:
+        """Bring the index up to date after ``labels[global_idx]`` went from
+        ``old`` to ``new``, by redoing only the trees that changed.
+
+        :meth:`_build_index` sorts every label in the cloud, 0.7s on a
+        39M-point plot, and :meth:`apply` used to pay it on every tree
+        switch for an edit that moved a few thousand points between two
+        trees. A loaded scene holds its trees whole (see :meth:`load`), so
+        where a changed tree's points are now can be read off the scene
+        alone, in about a millisecond.
+
+        ``order`` itself is left as it was: a changed tree's fresh indices
+        go in ``_moved``, which :meth:`indices_for` looks in first. Each
+        entry is a copy of what ``order`` already holds a stale version of,
+        so once a quarter of the cloud has been through here the whole
+        index is rebuilt and the copies dropped.
+        """
+        changed = old != new
+        touched = np.union1d(np.unique(old[changed]), np.unique(new[changed]))
+        added = False
+        for label in touched.tolist():
+            if label in (UNASSIGNED, NOISE):
+                # Not trees: only some of their points are ever loaded, and
+                # nothing on the editing path asks where they all are.
+                self._stale.add(label)
+                self._moved.pop(label, None)
+                continue
+            was = self.indices_for(label)
+            inside = global_idx[new == label]
+            if was.size == int(np.count_nonzero(old == label)):
+                idx = inside  # every point it had was in the scene
+            else:
+                # Some of this tree sits outside the scene (a caller applying
+                # a hand-picked subset): ask the labels themselves.
+                idx = np.flatnonzero(self.labels == label)
+            self._moved_points += idx.size - (
+                self._moved[label].size if label in self._moved else 0
+            )
+            self._moved[label] = idx
+            if not idx.size:
+                self.records.pop(label, None)
+                continue
+            pts = self.coords[idx]
+            lo, hi = pts.min(axis=0), pts.max(axis=0)
+            added |= label not in self.records
+            self.records[label] = TreeRecord(
+                label=label,
+                count=int(idx.size),
+                centroid=(float((lo[0] + hi[0]) / 2),
+                          float((lo[1] + hi[1]) / 2)),
+                bbox=(lo, hi),
+            )
+        if added:
+            # Lowest id first, as a full rebuild leaves them.
+            self.records = dict(sorted(self.records.items()))
+        self._boxes = None
+        if self._moved_points > max(self.labels.size // 4, _COMPACT_FLOOR):
+            self._build_index()
+
+    def _tree_boxes(self):
+        """``(labels, mins, maxs)`` of every tree's bounding box as arrays,
+        lowest id first, for testing them all against a box at once."""
+        if self._boxes is None:
+            labels = np.fromiter(sorted(self.records), dtype=np.int64,
+                                 count=len(self.records))
+            mins = np.empty((labels.size, 3), dtype=self.coords.dtype)
+            maxs = np.empty_like(mins)
+            for k, label in enumerate(labels.tolist()):
+                mins[k], maxs[k] = self.records[label].bbox
+            self._boxes = (labels, mins, maxs)
+        return self._boxes
+
     # -- neighbour search --------------------------------------------------
     def neighbours(self, label: int, reach: float) -> set[int]:
         """Trees whose points come within ``reach`` of tree ``label``.
 
-        Delegates to :func:`analysis.neighbours_by_points` against the
-        resident (not memory-mapped) coords/labels — same algorithm the
-        review panel's own neighbour picker uses, just pointed at the whole
-        file's data instead of whatever's currently loaded.
+        The same answer :func:`analysis.neighbours_by_points` gives for the
+        whole cloud -- same candidates, same samples, same distances -- but
+        found through the index. That function has to scan every point to
+        learn which trees are near (0.2s a tree on a 39M-point plot); here
+        each tree's bounding box is already known, so only the few whose
+        box reaches this one's are looked at, and only their own points.
         """
-        from . import analysis
+        return set(self.neighbour_distances(label, reach))
 
-        tmp = PointCloud(coords=self.coords, labels=self.labels)
-        return analysis.neighbours_by_points(tmp, label, reach)
+    def neighbour_distances(self, label: int, reach: float) -> dict[int, float]:
+        """``{tree id: how close it comes to tree ``label``}`` for every tree
+        within ``reach`` -- :func:`analysis.neighbour_distances`, by index."""
+        from . import analysis, density
+
+        label = int(label)
+        mine = self.indices_for(label)
+        if mine.size == 0:
+            return {}
+        pts = self.coords[mine]
+        lo, hi = pts.min(axis=0) - reach, pts.max(axis=0) + reach
+        labels, mins, maxs = self._tree_boxes()
+        overlaps = np.all((mins <= hi) & (maxs >= lo), axis=1)
+        overlaps &= labels != label
+        # A tree whose whole box is inside this one's reach has every point
+        # in it: nothing to test. That is most of the candidates of a tree
+        # that sprawls across the plot, which would otherwise have every
+        # one of their points gathered just to be told so.
+        within = np.all((mins >= lo) & (maxs <= hi), axis=1)
+
+        def candidates():
+            for k in np.flatnonzero(overlaps).tolist():
+                other = int(labels[k])
+                idx = self.indices_for(other)
+                if not within[k]:
+                    idx = idx[density.in_box(self.coords[idx], lo, hi)]
+                if idx.size:
+                    yield other, idx
+
+        return analysis.sampled_distances(
+            self.coords, mine, candidates(), reach
+        )
 
     # -- loading -----------------------------------------------------------
     def load(self, labels: list[int], margin: float = 1.0) -> tuple[PointCloud, np.ndarray]:
@@ -860,16 +1002,16 @@ class _BaseCatalog:
         # self.coords is the whole catalogue, so the latter builds three
         # (N, 3) boolean temporaries — 1.8GB of churn per tree load on a
         # 200M-point file, for a mask that fits in 200MB.
-        near = density.in_box(self.coords, lo, hi)
-        near &= self.labels == UNASSIGNED
+        picked = density.in_box(self.coords, lo, hi)
+        picked &= self.labels == UNASSIGNED
         # Union through a mask rather than np.union1d, which concatenates and
         # sorts: the trees' own rows plus the unassigned ones run to millions
         # on a plot-sized file, and sorting them was two thirds of the time to
         # open a tree. Marking a mask and reading it back is one pass, and
-        # comes out ascending and duplicate-free just the same.
-        picked = np.zeros(len(self.labels), dtype=bool)
+        # comes out ascending and duplicate-free just the same. The trees are
+        # marked on the unassigned points' own mask, which they share no row
+        # with, rather than on a second one the size of the cloud.
         picked[tree_idx] = True
-        picked |= near
         global_idx = np.flatnonzero(picked)
 
         sub = self._mm[self._rows(global_idx)]
@@ -928,12 +1070,17 @@ class _BaseCatalog:
         the master array, so the catalog and any later `load()` reflect it."""
         if global_idx is None or global_idx.size == 0:
             return
-        self.labels[global_idx] = cloud.labels
         if self.classes is not None and cloud.classes is not None:
             self.classes[global_idx] = cloud.classes
-        self._build_index()
-        if self.labels.size:
-            self._next_id = max(self._next_id, int(self.labels.max()) + 1)
+        old = self.labels[global_idx]
+        new = np.asarray(cloud.labels)
+        if np.array_equal(old, new):
+            # Nothing moved between trees, which is every switch away from a
+            # tree that was only looked at: the index is already right.
+            return
+        self.labels[global_idx] = new
+        self._update_index(global_idx, old, new)
+        self._next_id = max(self._next_id, int(new.max()) + 1)
 
     # -- saving --------------------------------------------------------
     def save(
@@ -971,7 +1118,7 @@ class _BaseCatalog:
             shutil.copyfile(self.path, target)
 
         if changed.size == 0 and class_changed.size == 0:
-            self._finalize_save(target, is_new_target)
+            self._finalize_save(target, is_new_target, progress)
             return f"Saved (no changes) → {target}"
 
         # The interpolation passes share the bar up to the write, the label
@@ -1001,7 +1148,7 @@ class _BaseCatalog:
         del out
         if progress is not None:
             progress("Finishing…", _SAVE_FINALIZE_AT)
-        self._finalize_save(target, is_new_target)
+        self._finalize_save(target, is_new_target, progress)
 
         if not is_new_target:
             # Only a write to self.path advances the diff baseline — a
@@ -1190,12 +1337,10 @@ class TreeCatalog(_BaseCatalog):
         self._mm = np.memmap(self.path, dtype=self.dtype, mode="r",
                               offset=self.offset, shape=(self.count,))
 
-    def _decode_coords_raw(self, sub) -> np.ndarray:
-        return np.column_stack([
-            sub[self._names["x"]],
-            sub[self._names["y"]],
-            sub[self._names["z"]],
-        ]).astype(np.float64)
+    def _decode_axis_raw(self, sub, axis: int) -> np.ndarray:
+        # np.array, not asarray: the caller shifts the column in place, and
+        # a float64 field would otherwise come back as a view of the file.
+        return np.array(sub[self._names["xyz"[axis]]], dtype=np.float64)
 
     def _decode_labels(self, sub):
         if self.is_rgb:
@@ -1203,19 +1348,13 @@ class TreeCatalog(_BaseCatalog):
         return io._normalize_labels(sub[self.label_field]), None
 
     def _labels_from_rgb(self, sub):
-        r = sub[self._names["red"]].astype(np.uint32)
-        g = sub[self._names["green"]].astype(np.uint32)
-        b = sub[self._names["blue"]].astype(np.uint32)
-        packed = (r << 16) | (g << 8) | b
-        uniq, inverse = np.unique(packed, return_inverse=True)
-        labels = (inverse + 1).astype(np.int32)
-        labels[packed == 0] = UNASSIGNED
-        label_colors = {
-            int(k + 1): (int((u >> 16) & 255), int((u >> 8) & 255), int(u & 255))
-            for k, u in enumerate(uniq)
-            if u != 0
-        }
-        return labels, label_colors
+        # A lookup table over the 2**24 possible colours on a plot-sized
+        # cloud, a sort on a small one: see io.labels_from_rgb.
+        return io.labels_from_rgb(
+            sub[self._names["red"]],
+            sub[self._names["green"]],
+            sub[self._names["blue"]],
+        )
 
     def _write_labels(self, out, changed: np.ndarray, values: np.ndarray) -> None:
         if self.is_rgb:
@@ -1324,12 +1463,11 @@ class LasCatalog(_BaseCatalog):
         self._mm = np.memmap(self.path, dtype=self.dtype, mode="r",
                               offset=self.offset, shape=(self.count,))
 
-    def _decode_coords_raw(self, sub) -> np.ndarray:
-        return np.column_stack([
-            sub[self._names["x"]].astype(np.float64) * self._scales[0] + self._offsets[0],
-            sub[self._names["y"]].astype(np.float64) * self._scales[1] + self._offsets[1],
-            sub[self._names["z"]].astype(np.float64) * self._scales[2] + self._offsets[2],
-        ])
+    def _decode_axis_raw(self, sub, axis: int) -> np.ndarray:
+        column = sub[self._names["xyz"[axis]]].astype(np.float64)
+        column *= self._scales[axis]
+        column += self._offsets[axis]
+        return column
 
     def _decode_labels(self, sub):
         return io._normalize_labels(sub[self.label_field]), None
@@ -1348,26 +1486,41 @@ class LasCatalog(_BaseCatalog):
     def subset_writer(self):
         import laspy
 
-        las = laspy.read(self.path)
+        # The header only: the points are already memory-mapped here, in
+        # laspy's own record layout, so a tree's rows are read straight out
+        # of the file. laspy.read() decoded every point of the plot into
+        # memory first -- the whole file again, to copy a tree out of it.
+        with laspy.open(self.path) as fh:
+            header = fh.header
 
         def write(rows: np.ndarray, dest: str) -> None:
             # laspy recomputes the point count and the extents from the
             # points it is given, and carries the header's scales, offsets,
             # CRS and Extra-Bytes layout over unchanged.
-            laspy.LasData(header=las.header, points=las.points[rows]).write(dest)
+            points = laspy.PackedPointRecord(
+                np.ascontiguousarray(self._mm[rows]), header.point_format
+            )
+            laspy.LasData(header=header, points=points).write(dest)
 
-        try:
-            yield write
-        finally:
-            del las
+        yield write
 
-    def _finalize_save(self, target: str, is_new_target: bool) -> None:
+    def _finalize_save(self, target: str, is_new_target: bool,
+                       progress: ProgressFn | None = None) -> None:
         laz = _laz_export_path(self.path, target)
         if laz is None:
             return
-        import laspy
+        from . import workspace
 
-        laspy.read(target).write(laz)
+        def report(message: str, fraction: float) -> None:
+            if progress is not None:
+                progress(
+                    f"{message} {os.path.basename(laz)}…",
+                    _SAVE_FINALIZE_AT + (1.0 - _SAVE_FINALIZE_AT) * fraction,
+                )
+
+        # In chunks: laspy.read(target).write(laz) held the whole plot in
+        # memory to make a compressed copy of it, on every save.
+        workspace.compress_las(target, laz, report)
 
 
 def _reject_extra_ply_elements(header: bytes) -> None:

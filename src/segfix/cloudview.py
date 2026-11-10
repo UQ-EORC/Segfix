@@ -34,6 +34,8 @@ everywhere, no ``dims.order`` remap.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import numpy as np
 from vispy import scene
 from vispy.scene.cameras import TurntableCamera
@@ -207,6 +209,9 @@ class CloudView:
         #: (fov, scale_factor, center) to go back to, while inside the cloud.
         self._outside = None
         self._size = 3.0  # marker diameter in screen pixels
+        # Depth of batch() blocks open, and what they have put off.
+        self._batch_depth = 0
+        self._pending: set[str] = set()
 
         #: fn(str) -> None, set by the shell to write the status bar
         self.on_status = None
@@ -399,8 +404,39 @@ class CloudView:
         self._redraw()
         self._redraw_highlight()
 
+    @contextmanager
+    def batch(self):
+        """Put off redrawing until the block ends, then do it once.
+
+        Every setter here sends the cloud to the GPU again: positions,
+        colours and sizes for every shown point, whatever it was that
+        changed. One edit sets the colours and then the visibility, and
+        loading a tree sets the points and then their size, so each paid
+        for two or three uploads of a million points to show one picture.
+        Inside a block they only note what is stale; leaving the outermost
+        block redraws that, once. Nested blocks join the outer one.
+        """
+        self._batch_depth += 1
+        try:
+            yield
+        finally:
+            self._batch_depth -= 1
+            if self._batch_depth == 0:
+                pending, self._pending = self._pending, set()
+                if "points" in pending:
+                    self._redraw()
+                if "highlight" in pending:
+                    self._redraw_highlight()
+
     def _redraw(self) -> None:
+        if self._batch_depth:
+            self._pending.add("points")
+            return
         vis = self._shown if len(self._shown) == len(self._coords) else None
+        if vis is not None and vis.all():
+            # Everything is shown, which is the usual case: hand the arrays
+            # over as they are instead of copying both through the mask.
+            vis = None
         pos = self._coords if vis is None else self._coords[vis]
         if len(pos) == 0:
             self.markers.visible = False
@@ -456,6 +492,9 @@ class CloudView:
         return int(np.count_nonzero(self._selected))
 
     def _redraw_highlight(self) -> None:
+        if self._batch_depth:
+            self._pending.add("highlight")
+            return
         mask = self._selected
         if mask.shape[0] != len(self._coords):
             mask = np.zeros(len(self._coords), dtype=bool)

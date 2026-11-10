@@ -34,6 +34,7 @@ re-compress the corrected cloud back to ``.laz`` beside the ``.las``.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Callable
@@ -97,19 +98,53 @@ def _decompress_with_progress(
     Extra-Bytes layout arbor's ``treeID`` lives in), and the EVLRs follow the
     points, which is where the format wants them.
     """
+    _transcode_las(source, dest, report, "Decompressing", compress=False)
+
+
+def compress_las(
+    source: str | Path, dest: str | Path, report: ProgressFn | None = None
+) -> None:
+    """Stream an uncompressed ``.las`` out to a ``.laz`` beside it.
+
+    The way back from :func:`_decompress_with_progress`, for the save that
+    mirrors a corrected working copy to the ``.laz`` the project came from.
+    That was ``laspy.read(las).write(laz)``: the whole plot decoded into
+    memory, on every save, to copy it. In chunks it holds a few million
+    points whatever the file's size, and can say how far along it is.
+
+    Written beside ``dest`` and moved into place when complete, so a save
+    that is interrupted leaves the previous ``.laz`` rather than half of a
+    new one.
+    """
+    dest = Path(dest)
+    partial = dest.with_name(dest.name + ".part")
+    try:
+        _transcode_las(Path(source), partial, report, "Compressing",
+                       compress=True)
+        os.replace(partial, dest)
+    finally:
+        if partial.exists():
+            partial.unlink()
+
+
+def _transcode_las(
+    source: Path, dest: Path, report: ProgressFn | None, message: str,
+    compress: bool,
+) -> None:
+    """Copy a LAS/LAZ to ``dest`` chunk by chunk, compressed or not."""
     import laspy
 
     with laspy.open(str(source)) as reader:
         total = reader.header.point_count
         with laspy.open(
-            str(dest), mode="w", header=reader.header, do_compress=False
+            str(dest), mode="w", header=reader.header, do_compress=compress
         ) as writer:
             done = 0
             for chunk in reader.chunk_iterator(_LAZ_CHUNK):
                 writer.write_points(chunk)
                 done += len(chunk)
                 if report is not None:
-                    report("Decompressing", done / total if total else 1.0)
+                    report(message, done / total if total else 1.0)
             if reader.evlrs:
                 writer.write_evlrs(reader.evlrs)
 

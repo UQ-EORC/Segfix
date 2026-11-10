@@ -67,10 +67,11 @@ from . import theme
 from .cloudview import INSIDE_FOV
 from .icons import icon
 from .lasso import ClusterTool, LassoTool
-from .model import NOISE, UNASSIGNED, PointCloud
+from .model import NOISE, UNASSIGNED, PointCloud, label_counts
 from .overlays import SlabHandles
 from .viewer import (
     ScalarRamp,
+    batched,
     busy,
     class_colors,
     colors_for_labels,
@@ -136,6 +137,11 @@ DEFAULT_CLUSTER_GAP_FACTOR = 1.0
 #: tree by tree without a reload would otherwise climb without limit.
 CLUSTER_CACHE_ENTRIES = 64
 
+#: A loaded cloud of at least this many points has its spacing measured on
+#: a worker as soon as it arrives (see SegFixController._start_spacing_prefetch).
+#: Below it the measurement is a few milliseconds and not worth a thread.
+SPACING_PREFETCH_ABOVE = 50_000
+
 #: Threads the gap-ladder prefetch runs on. One is not enough on a big tree:
 #: a labelling there takes about as long as a user takes to click again, so a
 #: single worker walks the ladder at exactly the speed it is being chased and
@@ -176,6 +182,10 @@ class SegFixController:
         # connected-component labellings, one per tree and gap, each built
         # the first time that combination is asked for and kept thereafter.
         self._cluster_spacing: float | None = None
+        #: The spacing being measured ahead of need, as (the point array it
+        #: is for, the worker, a one-item list the worker puts it in); see
+        #: _start_spacing_prefetch.
+        self._spacing_job: tuple | None = None
         #: (tree label, gap) -> (point indices, component id per index).
         #: Written from the prefetch worker as well as from here, so every
         #: mutation goes through _cache_cluster/_cluster_cc_get under
@@ -240,7 +250,9 @@ class SegFixController:
         self.cluster.set_armed(False)
         self._stop_cluster_prefetch()
         self._cluster_spacing, self._cluster_cc = None, {}  # for the old points
+        self._spacing_job = None
         self.cloud = cloud
+        self._start_spacing_prefetch()
         self.focus_label = focus
         self.save_path = cloud.source_path
         self.faded_ids = set()  # a fresh cloud starts with nothing faded
@@ -265,12 +277,46 @@ class SegFixController:
         """The cluster tool's bridging distance, in metres: the loaded
         points' typical spacing times :attr:`cluster_gap_factor`. Measuring
         the spacing builds a KD-tree over what's loaded, so it's done once
-        per cloud, on first need."""
+        per cloud -- started on a worker when the cloud arrives (see
+        :meth:`_start_spacing_prefetch`) and collected here on first need."""
         from . import analysis
 
         if self._cluster_spacing is None:
-            self._cluster_spacing = analysis.point_spacing(self.view.coords)
+            coords = self.view.coords
+            job, self._spacing_job = self._spacing_job, None
+            if job is not None and job[0] is coords:
+                job[1].join()
+                if job[2]:
+                    self._cluster_spacing = job[2][0]
+            if self._cluster_spacing is None:  # no worker, or it failed
+                self._cluster_spacing = analysis.point_spacing(coords)
         return self._cluster_spacing * self.cluster_gap_factor
+
+    def _start_spacing_prefetch(self) -> None:
+        """Measure the new cloud's point spacing off the GUI thread.
+
+        The panel quotes the cluster gap in centimetres, so it asks for the
+        spacing the first time a selection is cleared on every tree loaded,
+        cluster tool or no: a KD-tree over a million loaded points, 0.1s
+        with the window frozen. Nothing needs the number for the first
+        moments after a load, so the same measurement of the same points is
+        started here and :attr:`cluster_gap` waits for it only if it is
+        asked before the worker is done. The KD-tree work releases the GIL.
+        """
+        coords = getattr(self.view, "coords", None)
+        if (not self.cluster_prefetch or coords is None
+                or len(coords) < SPACING_PREFETCH_ABOVE):
+            return
+        found: list[float] = []
+
+        def measure() -> None:
+            found.append(analysis.point_spacing(coords))
+
+        worker = threading.Thread(
+            target=measure, name="segfix-spacing", daemon=True
+        )
+        self._spacing_job = (coords, worker, found)
+        worker.start()
 
     def set_cluster_gap_factor(self, factor: float) -> bool:
         """Change how much empty space a cluster click bridges, and re-run
@@ -2080,7 +2126,7 @@ class SegFixWidget(QWidget):
     def _refresh_tree_table(self) -> None:
         """Rebuild the table from the cloud: done, swatch+ID, point count."""
         cloud = self.c.cloud
-        vals, counts = np.unique(cloud.labels, return_counts=True)
+        vals, counts = label_counts(cloud.labels)  # np.unique, unsorted
         real = (vals != UNASSIGNED) & (vals != NOISE)
         vals, counts = vals[real], counts[real]
         rgba = colors_for_labels(vals, cloud.label_colors)
@@ -2898,7 +2944,8 @@ class SegFixWidget(QWidget):
     def _selected_trees(self, idx: np.ndarray) -> np.ndarray:
         """Distinct real tree IDs (no unassigned/noise) under the selection."""
         labels = self.c.cloud.labels[idx]
-        return np.unique(labels[(labels != UNASSIGNED) & (labels != NOISE)])
+        trees = label_counts(labels)[0]
+        return trees[(trees != UNASSIGNED) & (trees != NOISE)]
 
     def _update_current_info(self) -> None:
         self._update_neighbour_picker()
@@ -3086,16 +3133,19 @@ class SegFixWidget(QWidget):
         return np.flatnonzero(self.c.cloud.labels == self.current)
 
     def _apply(self, msg: str) -> None:
-        self.c._after_edit(msg)
-        self._update_info()  # rebuilds the table; re-syncs bbox/current tree
-        # What's shown depends on labels (the H toggle hides unassigned and
-        # noise; the eye column hides whole trees), so an edit can change it:
-        # points unassigned or marked noise while H is off, or moved into a
-        # hidden tree, have to disappear now -- not at the next unrelated
-        # redraw. After _update_info, so a tree that no longer exists has
-        # already dropped out of hidden_ids.
-        self._apply_visibility()
-        self._update_selection()
+        # Batched: the recolour, the cleared selection and the visibility
+        # below each redraw the cloud, and an edit should upload it once.
+        with batched(self.c.view):
+            self.c._after_edit(msg)
+            self._update_info()  # rebuilds the table; re-syncs bbox/current tree
+            # What's shown depends on labels (the H toggle hides unassigned
+            # and noise; the eye column hides whole trees), so an edit can
+            # change it: points unassigned or marked noise while H is off, or
+            # moved into a hidden tree, have to disappear now -- not at the
+            # next unrelated redraw. After _update_info, so a tree that no
+            # longer exists has already dropped out of hidden_ids.
+            self._apply_visibility()
+            self._update_selection()
 
     # -- history -----------------------------------------------------
     def on_undo(self) -> None:

@@ -50,7 +50,7 @@ from qtpy.QtWidgets import (
 
 from . import theme
 from .treecatalog import Catalog
-from .viewer import busy, colors_for_labels
+from .viewer import batched, busy, colors_for_labels
 
 DEFAULT_REACH = 1.0  # metres; matches SegFixWidget's own "reach" spinner default
 
@@ -121,9 +121,13 @@ class SceneController:
         self.current_label = label
         self._global_idx = global_idx
 
-        self.view.load_cloud(cloud, point_size=self.point_size)
-        self.seg.set_cloud(cloud, focus=label)
-        self.view.reset_view()
+        # One draw for the lot: the view draws the new points, then the
+        # panel re-applies its point size and (when colouring by class) its
+        # colours, each of which sent the whole cloud to the GPU again.
+        with batched(self.view):
+            self.view.load_cloud(cloud, point_size=self.point_size)
+            self.seg.set_cloud(cloud, focus=label)
+            self.view.reset_view()
         return (
             f"Loaded tree {label} + {len(neighbours)} neighbour(s); "
             f"{cloud.n_points:,} points"
