@@ -172,7 +172,123 @@ def test_without_a_class_field_the_box_says_how_to_get_one(panel):
     p._rebuild_class_buttons()
     assert p._class_btns == []
     assert not p.class_color_cb.isEnabled()
-    assert "Set up" in p.class_info.text()
+    assert "pick one" in p.class_info.text()
+    assert p.class_field_combo.currentText() == p.NO_CLASS_FIELD
+
+
+# -- the Field combo: switching the class field in place ----------------------
+def _combo_items(p) -> list[str]:
+    return [p.class_field_combo.itemText(i)
+            for i in range(p.class_field_combo.count())]
+
+
+def test_the_field_combo_lists_every_field_with_the_current_one_picked(panel):
+    p, seg, _cloud, _said = panel
+    seg.class_fields = ["classification", "intensity", "user_data"]
+    p._rebuild_class_buttons()
+    assert _combo_items(p) == [
+        p.NO_CLASS_FIELD, "classification", "intensity", "user_data"
+    ]
+    assert p.class_field_combo.currentText() == "classification"
+    assert p.class_field_combo.isEnabled()
+
+
+def test_picking_a_field_in_the_combo_asks_the_app_to_switch(panel):
+    p, seg, _cloud, _said = panel
+    seg.class_fields = ["classification", "intensity"]
+    p._rebuild_class_buttons()
+    asked = []
+
+    def switch(field):
+        asked.append(field)
+        seg.class_field = field  # the app read it in
+
+    p.on_class_field_changed = switch
+    p.class_field_combo.setCurrentText("intensity")
+    assert asked == ["intensity"]
+    assert p.class_field_combo.currentText() == "intensity"
+    p.class_field_combo.setCurrentText(p.NO_CLASS_FIELD)
+    assert asked == ["intensity", None]
+
+
+def test_a_refused_switch_puts_the_combo_back(panel):
+    """The app may decline (unsaved edits the user kept): the combo must
+    not claim a field the view isn't showing."""
+    p, seg, _cloud, _said = panel
+    seg.class_fields = ["classification", "intensity"]
+    p._rebuild_class_buttons()
+    p.on_class_field_changed = lambda field: None  # nothing happened
+    p.class_field_combo.setCurrentText("intensity")
+    assert p.class_field_combo.currentText() == "classification"
+    assert seg.class_field == "classification"
+
+
+def test_rebuilding_the_buttons_does_not_fire_a_switch(panel):
+    p, seg, _cloud, _said = panel
+    seg.class_fields = ["classification", "intensity"]
+    asked = []
+    p.on_class_field_changed = asked.append
+    p._rebuild_class_buttons()
+    p._rebuild_class_buttons()
+    assert asked == []
+
+
+# -- a many-valued field: ramp colouring and Value… ---------------------------
+def test_a_ramp_field_colours_low_to_high_and_names_stand_out(panel):
+    from segfix.viewer import ScalarRamp, class_colors, colors_for_scalar
+
+    p, seg, cloud, _said = panel
+    cloud.classes[:] = np.arange(cloud.n_points, dtype=np.int32)
+    seg.class_names = {5: "five"}
+    seg.class_ramp = (0.0, float(cloud.n_points - 1))
+    p._rebuild_class_buttons()
+    assert [b.text().strip() for b in p._class_btns] == ["five"]
+    assert "coloured low to high" in p.class_info.text()
+    p.class_color_cb.setChecked(True)
+    colours = seg.class_colours()
+    assert isinstance(colours, ScalarRamp)
+    fc = np.asarray(seg.view.face_color)
+    expected = colors_for_scalar(cloud.classes, *seg.class_ramp)
+    np.testing.assert_allclose(fc[0, :3], expected[0], atol=1e-6)
+    np.testing.assert_allclose(fc[-1, :3], expected[-1], atol=1e-6)
+    # The low and high ends are different colours, and the named value
+    # wears its class colour rather than the ramp's.
+    assert not np.allclose(fc[0, :3], fc[-1, :3])
+    np.testing.assert_allclose(
+        fc[5, :3], class_colors(seg.class_names)[5], atol=1e-6
+    )
+
+
+def test_value_gives_the_selection_a_typed_number(panel, monkeypatch):
+    from qtpy.QtWidgets import QInputDialog
+
+    p, seg, cloud, _said = panel
+    seg.class_ramp = (0.0, 1000.0)
+    monkeypatch.setattr(
+        QInputDialog, "getInt", staticmethod(lambda *a, **k: (417, True))
+    )
+    seg.view.selected = {0, 1, 2}
+    p.on_set_value()
+    assert cloud.classes[[0, 1, 2]].tolist() == [417, 417, 417]
+    assert 417 not in seg.class_names  # a ramp field: no button for it
+
+
+def test_value_on_a_class_field_names_the_new_value_so_it_gets_a_button(
+        panel, monkeypatch):
+    from qtpy.QtWidgets import QInputDialog
+
+    p, seg, cloud, _said = panel
+    remembered = []
+    p.on_class_names_changed = remembered.append
+    monkeypatch.setattr(
+        QInputDialog, "getInt", staticmethod(lambda *a, **k: (7, True))
+    )
+    seg.view.selected = {0}
+    p.on_set_value()
+    assert cloud.classes[0] == 7
+    assert seg.class_names[7] == "Class 7"
+    assert remembered[-1][7] == "Class 7"
+    assert p._class_codes == [LEAF, WOOD, 7]
 
 
 # -- the buttons fit their names ----------------------------------------------

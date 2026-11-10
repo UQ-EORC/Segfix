@@ -70,6 +70,7 @@ from .lasso import ClusterTool, LassoTool
 from .model import NOISE, UNASSIGNED, PointCloud
 from .overlays import SlabHandles
 from .viewer import (
+    ScalarRamp,
     busy,
     class_colors,
     colors_for_labels,
@@ -208,12 +209,23 @@ class SegFixController:
         #: ``(lowest, highest)`` value the class field can store, or None;
         #: a new class must fit. Set by the app from the catalog.
         self.class_range: tuple[int, int] | None = None
+        #: ``(lowest, highest)`` value the class field *holds* when it has
+        #: too many distinct values for a button each (intensity, a time):
+        #: such a field is coloured along a ramp. None for a class-like one.
+        self.class_ramp: tuple[float, float] | None = None
+        #: Every per-point field the class field could be switched to, for
+        #: the Field combo in the Point class box. Set by the app.
+        self.class_fields: list[str] = []
 
-    def class_colours(self) -> dict | None:
-        """``{value: rgb}`` while colouring by class, else None."""
+    def class_colours(self):
+        """``{value: rgb}`` (or a :class:`ScalarRamp`) while colouring by
+        class, else None."""
         if not self.color_by_class or self.cloud.classes is None:
             return None
-        return class_colors(self.class_names)
+        colours = class_colors(self.class_names)
+        if self.class_ramp is not None:
+            return ScalarRamp(*self.class_ramp, named=colours)
+        return colours
 
     def set_cloud(self, cloud: PointCloud, focus: int | None = None) -> None:
         """Re-point the controller at a freshly loaded cloud (the view has
@@ -556,6 +568,9 @@ class SegFixWidget(QWidget):
         # Optional fn()->None: set by the app to open the class set-up
         # dialog (which needs the file, not just the loaded cloud).
         self.on_setup_classes = None
+        #: Called with the field chosen in the Point class box's Field combo
+        #: (None for "no class field"); the app reads it in and reloads.
+        self.on_class_field_changed = None
         # Optional fn(names)->None: set by the app to remember the class
         # names with the project when a class is added here.
         self.on_class_names_changed = None
@@ -1074,6 +1089,20 @@ class SegFixWidget(QWidget):
         )
         self.class_color_cb.toggled.connect(self._on_color_by_class)
         lay.addWidget(self.class_color_cb)
+        field_row = QHBoxLayout()
+        field_row.setContentsMargins(0, 0, 0, 0)
+        field_row.addWidget(QLabel("Field"))
+        self.class_field_combo = QComboBox()
+        self.class_field_combo.setToolTip(
+            "Which per-point field the class buttons edit and Colour by "
+            "class shows. Any numeric field of the cloud can be chosen, "
+            "and each field's value names are remembered with the project."
+        )
+        self.class_field_combo.currentIndexChanged.connect(
+            self._on_class_field_combo
+        )
+        field_row.addWidget(self.class_field_combo, stretch=1)
+        lay.addLayout(field_row)
         self.class_info = QLabel()
         self.class_info.setWordWrap(True)
         lay.addWidget(self.class_info)
@@ -1104,9 +1133,17 @@ class SegFixWidget(QWidget):
         )
         self.new_class_btn.clicked.connect(self.on_new_class)
         buttons.addWidget(self.new_class_btn)
+        self.set_value_btn = QPushButton("Value…")
+        self.set_value_btn.setToolTip(
+            "Give the selection a value you type, named or not - the way "
+            "to relabel a field with too many values for a button each. "
+            "With nothing selected, the whole current tree."
+        )
+        self.set_value_btn.clicked.connect(self.on_set_value)
+        buttons.addWidget(self.set_value_btn)
         self.setup_class_btn = QPushButton("Set up…")
         self.setup_class_btn.setToolTip(
-            "Choose the file's class field and name its classes"
+            "Name the values of the class field"
         )
         self.setup_class_btn.clicked.connect(self._on_setup_classes)
         buttons.addWidget(self.setup_class_btn)
@@ -1157,18 +1194,78 @@ class SegFixWidget(QWidget):
             )
             self._class_btns.append(btn)
         self._layout_class_buttons()
+        self._sync_class_field_combo()
         self.class_color_cb.setEnabled(has_field)
         self.new_class_btn.setEnabled(has_field)
-        self.class_scroll.setVisible(has_field)
+        self.set_value_btn.setEnabled(has_field)
+        self.class_scroll.setVisible(has_field and bool(self._class_btns))
         self.setup_class_btn.setVisible(self.on_setup_classes is not None)
-        if has_field:
-            self.class_info.setText(f"Field: {self.c.class_field}")
-        else:
+        ramp = self.c.class_ramp
+        if not has_field:
             self.class_info.setText(
-                "No class field - Set up… to edit leaf, wood, ground…"
+                "No class field - pick one to edit leaf, wood, ground…"
             )
-        self._class_overlay.adjustSize()
+        elif ramp is not None:
+            self.class_info.setText(
+                f"Too many values for a button each: coloured low to high, "
+                f"{ramp[0]:g} to {ramp[1]:g}. Value… relabels."
+            )
+        else:
+            self.class_info.setText("")
+        self.class_info.setVisible(bool(self.class_info.text()))
+        self._fit_class_overlay()
         self._position_current_tree_overlay()
+
+    def _fit_class_overlay(self) -> None:
+        """Size the Point class box to what it holds right now.
+
+        ``adjustSize()`` won't do: the info label wraps, so its height
+        depends on the box's width, which a plain size hint ignores, and
+        while the box is on screen the layout it reads is the one from
+        before the buttons and label changed. So the layout is brought up
+        to date first and asked for its height at the box's fixed width,
+        plus the room the group box keeps for its title and frame.
+        """
+        box = self._class_overlay
+        lay = box.layout()
+        lay.invalidate()
+        lay.activate()
+        m = box.contentsMargins()
+        inner_w = self.OVERLAY_W - m.left() - m.right()
+        if lay.hasHeightForWidth():
+            h = lay.totalHeightForWidth(inner_w)
+        else:
+            h = lay.totalSizeHint().height()
+        box.setFixedSize(self.OVERLAY_W, h + m.top() + m.bottom())
+
+    #: The Field combo's entry for "no class field".
+    NO_CLASS_FIELD = "(none)"
+
+    def _sync_class_field_combo(self) -> None:
+        """Refill the Field combo from the controller's field list and
+        point it at the field in use, without firing a switch."""
+        combo = self.class_field_combo
+        fields = list(self.c.class_fields)
+        current = self.c.class_field
+        if current is not None and current not in fields:
+            fields.insert(0, current)
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(self.NO_CLASS_FIELD)
+        combo.addItems(fields)
+        combo.setCurrentIndex(fields.index(current) + 1 if current else 0)
+        combo.blockSignals(False)
+        combo.setEnabled(bool(fields))
+
+    def _on_class_field_combo(self, index: int) -> None:
+        """The Field combo: switch the class field to the one picked, or
+        drop it; the app does the reading. Whatever it decided (it may
+        refuse, or the user may cancel) the combo is put back in step."""
+        text = self.class_field_combo.itemText(index)
+        field = None if text == self.NO_CLASS_FIELD or not text else text
+        if field != self.c.class_field and self.on_class_field_changed is not None:
+            self.on_class_field_changed(field)
+        self._sync_class_field_combo()
 
     def _class_columns(self) -> int:
         """Two columns of class buttons when every name fits in half the
@@ -1225,13 +1322,13 @@ class SegFixWidget(QWidget):
         if self.class_color_cb.isEnabled():
             self.class_color_cb.toggle()
         else:
-            self.c.view.status = "No class field - Set up… in Point class"
+            self.c.view.status = "No class field - pick one in Point class"
 
     def on_set_class(self, code: int) -> None:
         """Selection → class ``code``; with nothing selected, the whole
         current tree (the way D and X act on it)."""
         if self.c.cloud.classes is None:
-            self.c.view.status = "No class field - Set up… in Point class"
+            self.c.view.status = "No class field - pick one in Point class"
             return
         idx = self._selection_or_current_tree("classify")
         if idx is None:
@@ -1242,7 +1339,7 @@ class SegFixWidget(QWidget):
     def set_nth_class(self, n: int) -> None:
         """Ctrl+``n``: the ``n``-th class button, counting from 1."""
         if self.c.cloud.classes is None:
-            self.c.view.status = "No class field - Set up… in Point class"
+            self.c.view.status = "No class field - pick one in Point class"
             return
         if n > len(self._class_codes):
             self.c.view.status = (
@@ -1282,6 +1379,33 @@ class SegFixWidget(QWidget):
             self.on_set_class(code)
         else:
             self.c.view.status = f"Added class {name} (value {code})"
+
+    def on_set_value(self) -> None:
+        """Give the selection (or the whole current tree) a value typed
+        in, whether or not it has a name: the way to relabel a field with
+        too many values for a button each, or a value not named yet."""
+        from qtpy.QtWidgets import QInputDialog
+
+        if self.c.cloud.classes is None:
+            return
+        lo, hi = self.c.class_range or (np.iinfo(np.int32).min,
+                                        np.iinfo(np.int32).max)
+        value, ok = QInputDialog.getInt(
+            self, "Set value",
+            f"Value for {self.c.class_field} ({lo} to {hi}):",
+            0, lo, hi,
+        )
+        if not ok:
+            return
+        value = int(value)
+        if value not in self.c.class_names and self.c.class_ramp is None:
+            # A class-like field: the value gets a button like any other,
+            # under the name it would have had on load.
+            self.c.class_names[value] = f"Class {value}"
+            if self.on_class_names_changed is not None:
+                self.on_class_names_changed(dict(self.c.class_names))
+            self._rebuild_class_buttons()
+        self.on_set_class(value)
 
     def new_class_code(self) -> int | None:
         """The value a new class gets: one above every value named or

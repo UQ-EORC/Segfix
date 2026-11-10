@@ -28,6 +28,8 @@ UI-agnostic colour/mask helpers it and the panel share.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from .model import NOISE, UNASSIGNED, PointCloud
@@ -257,16 +259,56 @@ def class_colors(names: dict[int, str]) -> dict[int, tuple[float, float, float]]
     return out
 
 
-def colors_for_classes(classes: np.ndarray, colours: dict, labels=None,
+# A field with more distinct values than there could be class buttons
+# (intensity, GPS time, a height) is coloured low-to-high along this ramp
+# instead: viridis, sampled at a few stops and interpolated between them.
+_RAMP_STOPS = np.array([
+    (0.267, 0.005, 0.329), (0.283, 0.141, 0.458), (0.254, 0.265, 0.530),
+    (0.207, 0.372, 0.553), (0.164, 0.471, 0.558), (0.128, 0.567, 0.551),
+    (0.135, 0.659, 0.518), (0.267, 0.749, 0.441), (0.478, 0.821, 0.318),
+    (0.741, 0.873, 0.150), (0.993, 0.906, 0.144),
+], dtype=np.float32)
+
+
+@dataclass(frozen=True)
+class ScalarRamp:
+    """Colour a many-valued field by a ramp from ``lo`` to ``hi``, with any
+    ``named`` values (``{value: rgb}``) painted their own colour on top, so
+    the few values a user has named still stand out of the sweep."""
+
+    lo: float
+    hi: float
+    named: dict | None = None
+
+
+def colors_for_scalar(values: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    """``(N, 3)`` RGB along :data:`_RAMP_STOPS` for ``values`` in ``[lo, hi]``
+    (a constant field sits at the ramp's middle)."""
+    values = np.asarray(values, dtype=np.float64)
+    span = hi - lo
+    t = (values - lo) / span if span > 0 else np.full(len(values), 0.5)
+    t = np.clip(t, 0.0, 1.0) * (len(_RAMP_STOPS) - 1)
+    i = np.minimum(t.astype(np.int64), len(_RAMP_STOPS) - 2)
+    frac = (t - i)[:, None].astype(np.float32)
+    return _RAMP_STOPS[i] * (1 - frac) + _RAMP_STOPS[i + 1] * frac
+
+
+def colors_for_classes(classes: np.ndarray, colours, labels=None,
                        faded=None) -> np.ndarray:
     """``(N, 4)`` RGBA colouring points by their point class.
 
-    A value with no entry in ``colours`` (not in the mapping) is drawn grey.
-    ``labels`` + ``faded`` keep the per-tree fade working in class colours.
+    ``colours`` is ``{value: rgb}``, and a value with no entry (not in the
+    mapping) is drawn grey; or a :class:`ScalarRamp`, for a field with too
+    many values to name. ``labels`` + ``faded`` keep the per-tree fade
+    working in class colours.
     """
     classes = np.asarray(classes)
     rgba = np.empty((len(classes), 4), dtype=np.float32)
-    rgba[:] = UNASSIGNED_COLOR
+    if isinstance(colours, ScalarRamp):
+        rgba[:, :3] = colors_for_scalar(classes, colours.lo, colours.hi)
+        colours = colours.named or {}
+    else:
+        rgba[:] = UNASSIGNED_COLOR
     for code, rgb in colours.items():
         rgba[classes == code, :3] = rgb
     rgba[:, 3] = 1.0

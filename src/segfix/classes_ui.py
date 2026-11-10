@@ -58,6 +58,11 @@ LAS_CLASS_NAMES = {
 
 NONE_ITEM = "(no class field)"
 
+#: Past this many distinct values a field isn't a set of classes (intensity,
+#: GPS time, a height): neither this dialog nor the Point class box gives
+#: each value a row or a button; the view colours it along a ramp instead.
+MAX_LISTED_VALUES = 64
+
 
 def default_class_field(fields: list[str]) -> str | None:
     lowered = {f.lower(): f for f in fields}
@@ -75,18 +80,26 @@ class ClassSetupDialog(QDialog):
     """
 
     def __init__(self, catalog, field: str | None = None,
-                 names: dict[int, str] | None = None, parent=None):
+                 names: dict[int, str] | None = None, parent=None,
+                 names_by_field: dict[str, dict[int, str]] | None = None):
         super().__init__(parent)
         self.setWindowTitle("Point classes")
         self.catalog = catalog
         self._saved_field = field
         self._saved_names = dict(names or {})
+        #: Names the project gave other fields' values, so switching the
+        #: combo to one of them starts from those rather than blank.
+        self._names_by_field = {
+            f: dict(n) for f, n in (names_by_field or {}).items()
+        }
 
         layout = QVBoxLayout(self)
         intro = QLabel(
             "Point classes (leaf, wood, ground…) are read from one per-point "
             "field of the cloud, and saved back to it. The file stores only "
-            "numbers: name each value here. Add any class you'll need."
+            "numbers: name each value here. Add any class you'll need. "
+            "Each field's names are kept with the project, so switching "
+            "fields (here, or in the Point class box) loses nothing."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -163,10 +176,23 @@ class ClassSetupDialog(QDialog):
             QApplication.restoreOverrideCursor()
         if field == self._saved_field:
             names = dict(self._saved_names)
+        elif field in self._names_by_field:
+            names = dict(self._names_by_field[field])
         elif field.lower() == "classification":
             names = {v: LAS_CLASS_NAMES[v] for v in present if v in LAS_CLASS_NAMES}
         else:
             names = {}
+        if len(present) > MAX_LISTED_VALUES:
+            # Not a set of classes (intensity, a time): a row per value
+            # would be thousands. List what's named; the rest are coloured
+            # along a ramp in the view and set with Value….
+            self.error.setText(
+                f"{field} holds {len(present):,} distinct values "
+                f"({present[0]:g} to {present[-1]:g}), too many to list: "
+                "it's coloured low to high, and Value… in the Point class "
+                "box sets any of them. Name the few you need here."
+            )
+            present = []
         for value in sorted(set(present) | set(names)):
             self._append(value, names.get(value, f"Class {value}"))
 
@@ -236,10 +262,12 @@ class ClassSetupDialog(QDialog):
         self.accept()
 
 
-def prompt_class_setup(parent, catalog, field=None, names=None):
+def prompt_class_setup(parent, catalog, field=None, names=None,
+                       names_by_field=None):
     """Show :class:`ClassSetupDialog`; ``(field, names)`` or None if
     cancelled. ``field`` is None when the user turned classes off."""
-    dlg = ClassSetupDialog(catalog, field, names, parent)
+    dlg = ClassSetupDialog(catalog, field, names, parent,
+                           names_by_field=names_by_field)
     if dlg.exec() != QDialog.DialogCode.Accepted:
         return None
     return dlg.field(), dlg.names()

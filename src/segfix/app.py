@@ -765,12 +765,45 @@ def _class_names_from_settings(saved) -> dict[int, str]:
     return out
 
 
+def _names_by_field(saved) -> dict[str, dict[int, str]]:
+    """Every field's value names the project has, ``{field: {value: name}}``.
+
+    Projects from before the field switcher kept names for one field only,
+    as ``class_field`` + ``class_names``; those count as that field's.
+    """
+    out: dict[str, dict[int, str]] = {}
+    for field, names in (saved.get("class_names_by_field") or {}).items():
+        if isinstance(field, str) and isinstance(names, dict):
+            out[field] = _class_names_from_settings(names)
+    field = saved.get("class_field")
+    if isinstance(field, str) and field not in out and saved.get("class_names"):
+        out[field] = _class_names_from_settings(saved.get("class_names"))
+    return out
+
+
+def _names_for_field(saved, field: str | None) -> dict[int, str]:
+    """The names the project gave ``field``'s values, if it ever did."""
+    if not field:
+        return {}
+    return dict(_names_by_field(saved).get(field, {}))
+
+
 def _remember_classes(catalog, field, names) -> None:
+    """Record the class field in use and its names, keeping the names of
+    every other field the project has used, so switching back to one finds
+    them again."""
     from . import workspace
 
+    by_field = _names_by_field(workspace.settings(catalog.path))
+    if field:
+        by_field[field] = dict(names)
     workspace.remember(
         catalog.path, class_field=field,
         class_names={str(k): v for k, v in sorted(names.items())},
+        class_names_by_field={
+            f: {str(k): v for k, v in sorted(n.items())}
+            for f, n in by_field.items()
+        },
     )
 
 
@@ -778,62 +811,97 @@ def _use_classes(panel, catalog, names) -> None:
     """Point the editing controller at the catalog's class field + names."""
     import numpy as np
 
+    from .classes_ui import LAS_CLASS_NAMES, MAX_LISTED_VALUES
+
     seg = panel.c
     seg.class_field = catalog.class_field
     seg.class_range = catalog.class_range() if catalog.class_field else None
+    seg.class_ramp = None
     if catalog.class_field and catalog.classes is not None:
-        # Every value in the file gets a name, even one the project never
-        # named, so no class is left without a button.
-        for value in np.unique(catalog.classes).tolist():
-            names.setdefault(int(value), f"Class {value}")
+        values = np.unique(catalog.classes)
+        if len(values) > MAX_LISTED_VALUES:
+            seg.class_ramp = (float(values[0]), float(values[-1]))
+        else:
+            # Every value in the file gets a name, even one the project
+            # never named, so no class is left without a button; a LAS
+            # classification starts from the standard names.
+            standard = (LAS_CLASS_NAMES
+                        if catalog.class_field.lower() == "classification"
+                        else {})
+            for value in values.tolist():
+                names.setdefault(
+                    int(value), standard.get(int(value), f"Class {value}")
+                )
     seg.class_names = names if catalog.class_field else {}
     if not catalog.class_field and panel.class_color_cb.isChecked():
         panel.class_color_cb.setChecked(False)
 
 
+def _switch_class_field(win, panel, catalog, scene, field, names=None) -> bool:
+    """Make ``field`` the class field (None: no class field), the way the
+    Point class box's Field combo and the set-up dialog both do: settle any
+    unsaved edits to the field in use first, read the new one, give its
+    values the names the project remembers for it (``names`` overrides),
+    and reload the scene so the points on screen carry it. False when it
+    didn't happen: the user kept the unsaved edits, or the field won't do.
+    """
+    from qtpy.QtWidgets import QMessageBox
+
+    from . import workspace
+    from .viewer import busy
+
+    if field == catalog.class_field:
+        return True
+    scene._flush()  # so unsaved class edits on screen count too
+    if catalog.has_unsaved_class_edits():
+        answer = QMessageBox.question(
+            win, "Change the class field",
+            "Save the class edits to "
+            f"{catalog.class_field} before switching field?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if answer != QMessageBox.StandardButton.Save:
+            return False
+        panel.on_save()
+        if catalog.has_unsaved_class_edits():
+            return False  # the save failed and said so
+    busy(panel.c.view, f"Reading {field}…" if field else "Dropping classes…")
+    try:
+        catalog.set_class_field(field)
+    except ValueError as exc:
+        QMessageBox.warning(win, "Can't use that field", str(exc))
+        return False
+    if names is None:
+        names = _names_for_field(workspace.settings(catalog.path), field)
+    _use_classes(panel, catalog, names)
+    _remember_classes(catalog, field, panel.c.class_names)
+    msg = scene.reload_current()
+    panel._rebuild_class_buttons()
+    if msg is None and panel.c.class_colours() is not None:
+        panel._apply_transparency()  # nothing loaded for a tree: recolour in place
+    panel.c.view.status = msg or (
+        f"Point classes from {field}" if field else "Point classes off"
+    )
+    return True
+
+
 def _setup_classes(win, panel, catalog, scene) -> None:
     """Edit ▸ Point Classes… / the Point class box's Set up…: pick the class
     field and name its values, then reload the scene if the field changed."""
-    from qtpy.QtWidgets import QMessageBox
-
+    from . import workspace
     from .classes_ui import prompt_class_setup
-    from .viewer import busy
 
     choice = prompt_class_setup(
-        win, catalog, catalog.class_field, panel.c.class_names
+        win, catalog, catalog.class_field, panel.c.class_names,
+        names_by_field=_names_by_field(workspace.settings(catalog.path)),
     )
     if choice is None:
         return
     field, names = choice
     if field != catalog.class_field:
-        scene._flush()  # so unsaved class edits on screen count too
-        if catalog.has_unsaved_class_edits():
-            answer = QMessageBox.question(
-                win, "Change the class field",
-                "Save the class edits to "
-                f"{catalog.class_field} before switching field?",
-                QMessageBox.StandardButton.Save
-                | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Save,
-            )
-            if answer != QMessageBox.StandardButton.Save:
-                return
-            panel.on_save()
-            if catalog.has_unsaved_class_edits():
-                return  # the save failed and said so
-        busy(panel.c.view, f"Reading {field}…" if field else "Dropping classes…")
-        try:
-            catalog.set_class_field(field)
-        except ValueError as exc:
-            QMessageBox.warning(win, "Can't use that field", str(exc))
-            return
-        _use_classes(panel, catalog, names)
-        _remember_classes(catalog, field, panel.c.class_names)
-        msg = scene.reload_current()
-        panel._rebuild_class_buttons()
-        panel.c.view.status = msg or (
-            f"Point classes from {field}" if field else "Point classes off"
-        )
+        _switch_class_field(win, panel, catalog, scene, field, names)
         return
     _use_classes(panel, catalog, names)
     _remember_classes(catalog, field, panel.c.class_names)
@@ -1056,12 +1124,14 @@ def _run_scene(args) -> int:
     panel.size_spin.setValue(args.point_size)
     _build_menus(win, panel, catalog, scene_ctrl, open_path=args.cloud)
     bind_shortcuts(win, panel)
-    names = (_class_names_from_settings(saved.get("class_names"))
-             if saved.get("class_field") == catalog.class_field else {})
-    _use_classes(panel, catalog, names)
+    panel.c.class_fields = catalog.class_fields()
+    _use_classes(panel, catalog, _names_for_field(saved, catalog.class_field))
     if catalog.class_field and catalog.class_field != saved.get("class_field"):
         _remember_classes(catalog, catalog.class_field, panel.c.class_names)
     panel.on_setup_classes = lambda: _setup_classes(win, panel, catalog, scene_ctrl)
+    panel.on_class_field_changed = (
+        lambda field: _switch_class_field(win, panel, catalog, scene_ctrl, field)
+    )
     panel.on_class_names_changed = (
         lambda names: _remember_classes(catalog, catalog.class_field, names)
     )

@@ -545,13 +545,29 @@ Besides which tree each point belongs to, Segfix can edit what each point
 numeric per-point field of the cloud, such as a LAS `classification` or a
 PLY property like `semantic`.
 
-**Edit ▸ Point Classes…** (or **Set up…** in the **Point class** box under
-**Current tree**) picks the field and names its values. The file stores only
-numbers, so the names are yours: the dialog lists every value the field
-holds, and you type what each one means (a LAS `classification` starts from
-the standard ASPRS names). **Add class** adds a value the file doesn't have
-yet. The field and names are remembered with the project, so they're set
-once. `--class-field NAME` on the command line picks the field too.
+The **Field** combo in the **Point class** box (under **Current tree**)
+picks the field, the way CloudCompare's active scalar field does: it lists
+every numeric per-point field of the cloud except the tree ID, and choosing
+one reads it in on the spot, so `classification`, a `species` column and a
+`semantic` label can each be corrected in turn without leaving the tree
+under review. Unsaved edits to the field you're leaving are saved first (or
+the switch is cancelled). The field is remembered with the project, and
+`--class-field NAME` on the command line picks it too.
+
+**Edit ▸ Point Classes…** (or **Set up…** in the box) names the field's
+values. The file stores only numbers, so the names are yours: the dialog
+lists every value the field holds, and you type what each one means (a LAS
+`classification` starts from the standard ASPRS names). **Add class** adds
+a value the file doesn't have yet. Names are kept per field, so switching
+away and back finds them again.
+
+A field with more than 64 distinct values (an intensity, a GPS time, a
+height) isn't a set of classes, and gets no button per value: **Colour by
+class** colours it along a ramp from its lowest value to its highest, and
+**Value…** gives the selection (or the whole current tree) any number you
+type. Any values you do name in the dialog still get a button, and their
+own colour over the ramp. **Value…** works on a class-like field too, for a
+value that isn't named yet; there it gets a button like the rest.
 
 Classes are edited inside the same tree-and-neighbours review. The
 **Point class** box has a button per class, the first five on
