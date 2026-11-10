@@ -16,7 +16,7 @@ always resolves to the latest version, and each version has its own.
 > Devereux, T., Rivory, J., Woodgate, W., Aryal, R. R., Eaton, G. and
 > Phinn, S. (2026). *Segfix: interactive correction of tree instance
 > segmentation in forest point clouds* (version 1.3.0) [Computer software].
-> The University of Queensland. https://doi.org/10.5281/zenodo.23717302
+> The University of Queensland. https://doi.org/10.5281/zenodo.24118711
 
 ```bibtex
 @software{segfix,
@@ -27,7 +27,7 @@ always resolves to the latest version, and each version has its own.
   year         = {2026},
   version      = {1.3.0},
   organization = {The University of Queensland},
-  doi          = {10.5281/zenodo.23717302},
+  doi          = {10.5281/zenodo.24118711},
   url          = {https://github.com/UQ-EORC/Segfix}
 }
 ```
