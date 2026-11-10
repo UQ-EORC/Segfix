@@ -15,8 +15,8 @@ always resolves to the latest version, and each version has its own.
 
 > Devereux, T., Rivory, J., Woodgate, W., Aryal, R. R., Eaton, G. and
 > Phinn, S. (2026). *Segfix: interactive correction of tree instance
-> segmentation in forest point clouds* (version 1.2.2) [Computer software].
-> The University of Queensland. https://doi.org/10.5281/zenodo.23717303
+> segmentation in forest point clouds* (version 1.3.0) [Computer software].
+> The University of Queensland. https://doi.org/10.5281/zenodo.23717302
 
 ```bibtex
 @software{segfix,
@@ -25,9 +25,9 @@ always resolves to the latest version, and each version has its own.
   title        = {Segfix: interactive correction of tree instance
                   segmentation in forest point clouds},
   year         = {2026},
-  version      = {1.2.2},
+  version      = {1.3.0},
   organization = {The University of Queensland},
-  doi          = {10.5281/zenodo.23717303},
+  doi          = {10.5281/zenodo.23717302},
   url          = {https://github.com/UQ-EORC/Segfix}
 }
 ```
@@ -40,7 +40,7 @@ plot from `scripts/make_sample.py`: large coordinates and dense clouds, the
 editing loop, leaf and wood classes, and matching a field stem map. Click to
 watch:
 
-[![Watch the segfix walkthrough](https://raw.githubusercontent.com/UQ-EORC/Segfix/main/docs/walkthrough-thumbnail.png)](https://github.com/UQ-EORC/Segfix/releases/download/v1.2.2/segfix_walkthrough.mp4)
+[![Watch the segfix walkthrough](https://raw.githubusercontent.com/UQ-EORC/Segfix/main/docs/walkthrough-thumbnail.png)](https://github.com/UQ-EORC/Segfix/releases/download/v1.3.0/segfix_walkthrough.mp4)
 
 Testing is done on Fedora Linux 44, Windows 11 and macOS.
 
